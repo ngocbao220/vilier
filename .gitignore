@@ -1,0 +1,8 @@
+inputs/
+outputs/
+logs/
+__pycache__/
+*.pyc
+*.pth
+.pytest_cache/
+.DS_Store
