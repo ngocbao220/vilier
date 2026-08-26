@@ -6,6 +6,7 @@ import sys
 import warnings
 from contextlib import contextmanager
 import importlib
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Callable
 
@@ -20,7 +21,7 @@ def load_diarizer(config: dict, dry_run: bool = False):
     backend = str(config.get("backend", "sortformer"))
     if backend == "sortformer":
         return SortformerDiarizer(config, dry_run=dry_run)
-    if backend in {"pixit", "pyannote_pixit"}:
+    if backend in {"pixit", "pyannote", "pyannote_pixit"}:
         return PyannotePixitDiarizer(config, dry_run=dry_run)
     if backend == "diarizen":
         return DiariZenDiarizer(config, dry_run=dry_run)
@@ -246,7 +247,9 @@ class PyannotePixitDiarizer:
         _patch_torchaudio_audio_metadata()
         from pyannote.audio import Pipeline
 
+        _require_compatible_pyannote_model(self.model_name)
         _allow_torch_checkpoint_globals(torch)
+        _patch_pyannote_speaker_diarization_compat()
 
         token = os.environ.get(self.token_env) or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
         with _hf_hub_download_use_auth_token_compat(), _speechbrain_use_auth_token_compat():
@@ -289,22 +292,7 @@ class DiariZenDiarizer:
 
     def _load_pipeline(self):
         _patch_torchaudio_audio_metadata()
-        
-        # DiariZen requires its own custom fork of pyannote.audio (to support WavLM architectures etc).
-        # It is fundamentally incompatible with the standard pyannote.audio 3.3.2 required by PixIT.
-        import inspect
-        try:
-            import pyannote.audio.pipelines.utils as pyannote_utils
-            if "config" not in inspect.signature(pyannote_utils.get_model).parameters:
-                raise RuntimeError(
-                    "DiariZen requires a heavily customized fork of pyannote.audio. "
-                    "The current environment has standard pyannote.audio installed (required by PixIT). "
-                    "To use DiariZen, you must run: "
-                    "!pip install -U git+https://github.com/BUTSpeechFIT/DiariZen.git#egg=pyannote-audio\\&subdirectory=pyannote-audio "
-                    "(Note: This will break PixIT backend in this environment)."
-                )
-        except ImportError:
-            pass
+        _patch_pyannote_speaker_diarization_compat()
 
         DiariZenPipeline = _import_diarizen_pipeline()
 
@@ -317,6 +305,35 @@ class DiariZenDiarizer:
 
     def _dry_run_segments(self, vad_segments: list[dict]) -> list[SpeakerSegment]:
         return SortformerDiarizer(self.config, dry_run=True)._dry_run_segments(vad_segments)
+
+
+def _patch_pyannote_speaker_diarization_compat() -> None:
+    try:
+        import inspect
+        import pyannote.audio.pipelines.speaker_diarization as speaker_diarization
+    except Exception:
+        return
+
+    SpeakerDiarization = getattr(speaker_diarization, "SpeakerDiarization", None)
+    if SpeakerDiarization is None:
+        return
+
+    original_init = getattr(SpeakerDiarization, "__init__", None)
+    if not callable(original_init) or getattr(original_init, "_vilier_diarizen_compat", False):
+        return
+
+    valid_keys = {
+        key
+        for key, parameter in inspect.signature(original_init).parameters.items()
+        if key != "self" and parameter.kind in {parameter.POSITIONAL_OR_KEYWORD, parameter.KEYWORD_ONLY}
+    }
+
+    def patched_init(self, *args, **kwargs):
+        filtered_kwargs = {key: value for key, value in kwargs.items() if key in valid_keys}
+        return original_init(self, *args, **filtered_kwargs)
+
+    patched_init._vilier_diarizen_compat = True
+    SpeakerDiarization.__init__ = patched_init
 
 
 def _import_diarizen_pipeline():
@@ -483,12 +500,56 @@ def _load_pyannote_pipeline(pipeline_class, model_name: str, token: str | None):
     if not token:
         return pipeline_class.from_pretrained(model_name)
 
+    if _is_pyannote_community_model(model_name):
+        return pipeline_class.from_pretrained(model_name, token=token)
+
     try:
         return pipeline_class.from_pretrained(model_name, use_auth_token=token)
     except TypeError as exc:
         if "use_auth_token" not in str(exc):
             raise
-        return pipeline_class.from_pretrained(model_name)
+        try:
+            return pipeline_class.from_pretrained(model_name, token=token)
+        except TypeError as token_exc:
+            if "token" not in str(token_exc):
+                raise
+            return pipeline_class.from_pretrained(model_name)
+
+
+def _require_compatible_pyannote_model(model_name: str) -> None:
+    if not _is_pyannote_community_model(model_name):
+        return
+
+    version = _installed_distribution_version("pyannote.audio")
+    if version and _major_version(version) < 4:
+        raise RuntimeError(
+            f"{model_name} requires pyannote.audio>=4.0 because its config uses $model placeholders. "
+            f"The active environment has pyannote.audio=={version}. Upgrade pyannote.audio in this environment, "
+            "or use a pyannote 3.x-compatible model such as pyannote/speaker-diarization-3.1."
+        )
+
+
+def _normalize_hf_model_id(model_name: str) -> str:
+    return str(model_name).strip().rstrip("/")
+
+
+def _is_pyannote_community_model(model_name: str) -> bool:
+    return _normalize_hf_model_id(model_name) in {
+        "pyannote/speaker-diarization-community-1",
+        "pyannote-community/speaker-diarization-community-1",
+    }
+
+
+def _installed_distribution_version(name: str) -> str:
+    try:
+        return importlib_metadata.version(name)
+    except importlib_metadata.PackageNotFoundError:
+        return ""
+
+
+def _major_version(version: str) -> int:
+    match = re.match(r"^\s*(\d+)", str(version))
+    return int(match.group(1)) if match else 0
 
 
 @contextmanager

@@ -290,7 +290,7 @@ def process_one(
         if progress is not None:
             progress.start(audio_id, current_step)
             backend = str(diarization_config.get("backend", "sortformer"))
-            if backend in {"pixit", "pyannote_pixit", "diarizen"}:
+            if backend in {"pixit", "pyannote", "pyannote_pixit", "diarizen"}:
                 progress.item(audio_id, current_step, 0, 1, f"loading {backend} model")
         diarizer = load_diarizer(diarization_config, dry_run=dry_run)
         if isinstance(diarizer, (PyannotePixitDiarizer, DiariZenDiarizer)):

@@ -17,6 +17,7 @@ from pipeline.diarization import (
     _import_diarizen_pipeline,
     _hf_hub_download_use_auth_token_compat,
     _load_pyannote_pipeline,
+    _patch_pyannote_speaker_diarization_compat,
     _patch_torchaudio_audio_metadata,
     _speechbrain_device,
     _speechbrain_use_auth_token_compat,
@@ -576,6 +577,11 @@ class TimelineTest(unittest.TestCase):
         self.assertIsInstance(diarizer, DiariZenDiarizer)
         self.assertEqual(diarizer.model_name, "BUT-FIT/diarizen-wavlm-large-s80-md")
 
+    def test_load_diarizer_accepts_pyannote_alias_for_pixit_backend(self):
+        diarizer = load_diarizer({"backend": "pyannote"}, dry_run=True)
+
+        self.assertIsInstance(diarizer, PyannotePixitDiarizer)
+
     def test_diarizen_diarizer_loads_pipeline_and_normalizes_annotation(self):
         test_case = self
 
@@ -668,6 +674,85 @@ class TimelineTest(unittest.TestCase):
             DiariZenDiarizer({"model": "BUT-FIT/diarizen-wavlm-large-s80-md"})
 
         self.assertEqual(Pipeline.calls, [(("BUT-FIT/diarizen-wavlm-large-s80-md",), {})])
+
+    def test_pyannote_speaker_diarization_compat_filters_plda_kwarg(self):
+        calls = []
+
+        class SpeakerDiarization:
+            def __init__(self, segmentation=None, embedding=None):
+                calls.append({"segmentation": segmentation, "embedding": embedding})
+
+        speaker_diarization = types.ModuleType("pyannote.audio.pipelines.speaker_diarization")
+        speaker_diarization.SpeakerDiarization = SpeakerDiarization
+        pipelines = types.ModuleType("pyannote.audio.pipelines")
+        audio = types.ModuleType("pyannote.audio")
+        pyannote = types.ModuleType("pyannote")
+        pipelines.speaker_diarization = speaker_diarization
+        audio.pipelines = pipelines
+        pyannote.audio = audio
+
+        with mock.patch.dict(
+            sys.modules,
+            {
+                "pyannote": pyannote,
+                "pyannote.audio": audio,
+                "pyannote.audio.pipelines": pipelines,
+                "pyannote.audio.pipelines.speaker_diarization": speaker_diarization,
+            },
+        ):
+            _patch_pyannote_speaker_diarization_compat()
+            SpeakerDiarization(segmentation="seg", embedding="emb", plda="ignored")
+
+        self.assertEqual(calls, [{"segmentation": "seg", "embedding": "emb"}])
+
+    def test_pyannote_loader_filters_plda_kwarg_from_community_model(self):
+        class TorchModule(types.ModuleType):
+            def __init__(self):
+                super().__init__("torch")
+                self.cuda = SimpleNamespace(is_available=lambda: False)
+                self.backends = SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False))
+                self.device = lambda name: name
+
+        class Pipeline:
+            @classmethod
+            def from_pretrained(cls, model_name):
+                from pyannote.audio.pipelines.speaker_diarization import SpeakerDiarization
+
+                SpeakerDiarization(segmentation="seg", embedding="emb", plda="ignored")
+                return cls()
+
+            def to(self, device):
+                self.device = device
+
+        class SpeakerDiarization:
+            calls = []
+
+            def __init__(self, segmentation=None, embedding=None):
+                self.calls.append({"segmentation": segmentation, "embedding": embedding})
+
+        pyannote_audio = types.ModuleType("pyannote.audio")
+        pyannote_audio.Pipeline = Pipeline
+        speaker_diarization = types.ModuleType("pyannote.audio.pipelines.speaker_diarization")
+        speaker_diarization.SpeakerDiarization = SpeakerDiarization
+        pipelines = types.ModuleType("pyannote.audio.pipelines")
+        pipelines.speaker_diarization = speaker_diarization
+        pyannote = types.ModuleType("pyannote")
+        pyannote.audio = pyannote_audio
+
+        with mock.patch.dict(
+            sys.modules,
+            {
+                "torch": TorchModule(),
+                "pyannote": pyannote,
+                "pyannote.audio": pyannote_audio,
+                "pyannote.audio.pipelines": pipelines,
+                "pyannote.audio.pipelines.speaker_diarization": speaker_diarization,
+            },
+        ):
+            diarizer = PyannotePixitDiarizer({"backend": "pyannote", "model": "pyannote/speaker-diarization-community-1", "device": "cpu"})
+
+        self.assertEqual(diarizer.resolved_device, "cpu")
+        self.assertEqual(SpeakerDiarization.calls, [{"segmentation": "seg", "embedding": "emb"}])
 
     def test_import_diarizen_pipeline_retries_after_pyannote_audio_key_error(self):
         class Pipeline:
@@ -808,6 +893,20 @@ class TimelineTest(unittest.TestCase):
                 (("pyannote/model",), {}),
             ],
         )
+
+    def test_load_pyannote_community_pipeline_uses_token_kwarg(self):
+        class Pipeline:
+            calls = []
+
+            @classmethod
+            def from_pretrained(cls, *args, **kwargs):
+                cls.calls.append((args, kwargs))
+                return "pipeline"
+
+        result = _load_pyannote_pipeline(Pipeline, "pyannote/speaker-diarization-community-1", "hf_token")
+
+        self.assertEqual(result, "pipeline")
+        self.assertEqual(Pipeline.calls, [(("pyannote/speaker-diarization-community-1",), {"token": "hf_token"})])
 
     def test_hf_hub_download_compat_maps_use_auth_token_to_token(self):
         huggingface_hub = types.ModuleType("huggingface_hub")

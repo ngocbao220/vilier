@@ -1,6 +1,6 @@
 {
   "entrypoint": {
-    "input_path": "inputs/haveasip_khanhvi.mp3",
+    "input_path": "inputs/real.wav",
     "output_path": "outputs",
     "sample_rate": 16000
   },
@@ -19,10 +19,10 @@
     "merge_gap_seconds": 0.2
   },
   "diarization": {
-    "backend": "diarizen",
-    "model": "BUT-FIT/diarizen-wavlm-large-s80-md",
+    "backend": "pyannote",
+    "model": "pyannote/speaker-diarization-community-1",
     "token_env": "HUGGINGFACE_TOKEN",
-    "device": "cuda",
+    "device": "cpu",
     "nemo_log_level": "ERROR",
     "min_duration_seconds": 0.25,
     "max_chunk_seconds": 180.0
@@ -32,7 +32,7 @@
     "backend": "phowhisper_local",
     "model": "vinai/PhoWhisper-large",
     "language": "vi",
-    "device": "cuda",
+    "device": "cpu",
     "chunk_length_seconds": 30.0
   },
   "state_labeling": {
@@ -55,18 +55,18 @@
     "enabled": false,
     "backend": "demucs",
     "model": "htdemucs",
-    "device": "cuda",
+    "device": "cpu",
     "shifts": 1,
     "split": true,
     "overlap": 0.25,
     "residual_subtract": 0.5
   },
   "overlap_separation": {
-    "enabled": true,
+    "enabled": false,
     "backend": "sepreformer",
     "sepreformer_path": "SepReformer",
     "model_name": "SepReformer_Large_DM_WHAMR",
-    "device": "cuda",
+    "device": "cpu",
     "overlap_threshold_seconds": 0.2
   }
 }
