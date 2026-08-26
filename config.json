@@ -19,8 +19,8 @@
     "merge_gap_seconds": 0.2
   },
   "diarization": {
-    "backend": "pixit",
-    "model": "pyannote/speech-separation-ami-1.0",
+    "backend": "diarizen",
+    "model": "BUT-FIT/diarizen-wavlm-large-s80-md",
     "token_env": "HUGGINGFACE_TOKEN",
     "device": "cuda",
     "nemo_log_level": "ERROR",
@@ -42,10 +42,7 @@
     "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "api_key_env": "DASHSCOPE_API_KEY",
     "state_dir": "state",
-    "labels": [
-      "complete",
-      "incomplete"
-    ]
+    "labels": ["complete", "incomplete"]
   },
   "export": {
     "write_segment_wavs": false,

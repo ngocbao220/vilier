@@ -116,6 +116,35 @@ class CliPhaseTest(unittest.TestCase):
             manifest = json.loads((output_root / "podcast_single_30s" / "manifest.timeline.json").read_text(encoding="utf-8"))
             self.assertGreater(len(manifest["segments"]), 0)
 
+    def test_diarizen_backend_runs_in_dry_run_without_loading_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp) / "outputs"
+            config_path = Path(tmp) / "config.json"
+            config = json.loads(Path("config.json").read_text(encoding="utf-8"))
+            config["entrypoint"]["input_path"] = "inputs/podcast_single_30s.wav"
+            config["entrypoint"]["output_path"] = str(output_root)
+            config["runtime"]["dry_run"] = True
+            config.setdefault("diarization", {})["backend"] = "diarizen"
+            config["diarization"]["model"] = "BUT-FIT/diarizen-wavlm-large-s80-md"
+            config.setdefault("logging", {})["progress_bar"] = False
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pipeline.cli",
+                    "--config",
+                    str(config_path),
+                    "--until",
+                    "pre_asr",
+                ],
+                check=True,
+            )
+
+            manifest = json.loads((output_root / "podcast_single_30s" / "manifest.timeline.json").read_text(encoding="utf-8"))
+            self.assertGreater(len(manifest["segments"]), 0)
+
     def test_progress_heartbeat_reports_elapsed_time_during_long_step(self):
         class FakeProgress:
             def __init__(self):

@@ -22,6 +22,8 @@ def load_diarizer(config: dict, dry_run: bool = False):
         return SortformerDiarizer(config, dry_run=dry_run)
     if backend in {"pixit", "pyannote_pixit"}:
         return PyannotePixitDiarizer(config, dry_run=dry_run)
+    if backend == "diarizen":
+        return DiariZenDiarizer(config, dry_run=dry_run)
     raise ValueError(f"Unsupported diarization backend: {backend}")
 
 
@@ -254,6 +256,54 @@ class PyannotePixitDiarizer:
             if resolved_device:
                 pipeline.to(torch.device(resolved_device))
         return pipeline
+
+    def _dry_run_segments(self, vad_segments: list[dict]) -> list[SpeakerSegment]:
+        return SortformerDiarizer(self.config, dry_run=True)._dry_run_segments(vad_segments)
+
+
+class DiariZenDiarizer:
+    def __init__(self, config: dict, dry_run: bool = False):
+        self.config = config
+        self.dry_run = dry_run
+        self.model_name = str(config.get("model", "BUT-FIT/diarizen-wavlm-large-s80-md"))
+        self.cache_dir = str(config.get("cache_dir", "") or "")
+        self.rttm_out_dir = str(config.get("rttm_out_dir", "") or "")
+        self.min_duration = float(config.get("min_duration_seconds", 0.25))
+        self.resolved_device = "dry-run" if dry_run else str(config.get("device", "auto"))
+        self.pipeline = None if dry_run else self._load_pipeline()
+
+    def diarize(self, audio_path: Path, vad_segments: list[dict]) -> list[SpeakerSegment]:
+        if self.pipeline is None:
+            return self._dry_run_segments(vad_segments)
+        output = self.pipeline(str(audio_path), sess_name=audio_path.stem)
+        return pyannote_annotation_to_segments(output, self.min_duration)
+
+    def diarize_chunks(self, chunks: list[dict], progress_callback: Callable[[int, int, str], None] | None = None) -> list[SpeakerSegment]:
+        if self.pipeline is None:
+            if progress_callback is not None:
+                total = len(chunks)
+                for chunk_idx, chunk in enumerate(chunks, start=1):
+                    progress_callback(chunk_idx, total, str(chunk.get("id", f"chunk_{chunk_idx}")))
+            return SortformerDiarizer(self.config, dry_run=True)._dry_run_chunk_segments(chunks)
+        raise RuntimeError("DiariZen diarization must run on the full standardized audio file, not diarization chunks")
+
+    def _load_pipeline(self):
+        _patch_torchaudio_audio_metadata()
+        try:
+            from diarizen.pipelines.inference import DiariZenPipeline
+        except ModuleNotFoundError as exc:
+            if exc.name and not exc.name.startswith("diarizen"):
+                raise
+            raise ModuleNotFoundError(
+                "DiariZen is not installed in the active environment. Install the upstream "
+                "BUTSpeechFIT/DiariZen package before using diarization.backend=diarizen."
+            ) from exc
+
+        kwargs = {
+            "cache_dir": self.cache_dir or None,
+            "rttm_out_dir": self.rttm_out_dir or None,
+        }
+        return DiariZenPipeline.from_pretrained(self.model_name, **kwargs)
 
     def _dry_run_segments(self, vad_segments: list[dict]) -> list[SpeakerSegment]:
         return SortformerDiarizer(self.config, dry_run=True)._dry_run_segments(vad_segments)

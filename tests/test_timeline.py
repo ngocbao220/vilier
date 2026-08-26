@@ -576,6 +576,8 @@ class TimelineTest(unittest.TestCase):
         self.assertEqual(diarizer.model_name, "BUT-FIT/diarizen-wavlm-large-s80-md")
 
     def test_diarizen_diarizer_loads_pipeline_and_normalizes_annotation(self):
+        test_case = self
+
         class Turn:
             def __init__(self, start, end):
                 self.start = start
@@ -601,7 +603,7 @@ class TimelineTest(unittest.TestCase):
                 self.audio_path = audio_path
                 self.sess_name = sess_name
                 annotation = Annotation()
-                annotation.assertTrue = self.assertTrue
+                annotation.assertTrue = test_case.assertTrue
                 return annotation
 
         inference = types.ModuleType("diarizen.pipelines.inference")

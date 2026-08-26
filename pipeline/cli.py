@@ -10,7 +10,7 @@ from typing import TextIO
 
 from .asr import export_speaker_asr_audio, load_asr_runner, transcribe_asr_segments, write_transcript_json
 from .audio import iter_audio_files, load_mono, write_wav
-from .diarization import PyannotePixitDiarizer, build_diarization_chunks, load_diarizer
+from .diarization import DiariZenDiarizer, PyannotePixitDiarizer, build_diarization_chunks, load_diarizer
 from .labeling import label_transcripts, load_labeling_runner, resolve_state_dir, write_state_outputs
 from .music import apply_music_separation, load_music_separator
 from .overlap_separation import apply_overlap_separation, load_overlap_separator
@@ -289,10 +289,11 @@ def process_one(
         current_step = "diarization"
         if progress is not None:
             progress.start(audio_id, current_step)
-            if str(diarization_config.get("backend", "sortformer")) in {"pixit", "pyannote_pixit"}:
-                progress.item(audio_id, current_step, 0, 1, "loading pixit model")
+            backend = str(diarization_config.get("backend", "sortformer"))
+            if backend in {"pixit", "pyannote_pixit", "diarizen"}:
+                progress.item(audio_id, current_step, 0, 1, f"loading {backend} model")
         diarizer = load_diarizer(diarization_config, dry_run=dry_run)
-        if isinstance(diarizer, PyannotePixitDiarizer):
+        if isinstance(diarizer, (PyannotePixitDiarizer, DiariZenDiarizer)):
             running_label = f"running {standardized_path.name} device={diarizer.resolved_device}"
             if progress is not None:
                 progress.item(audio_id, current_step, 0, 1, running_label)
@@ -306,7 +307,7 @@ def process_one(
                 heartbeat_seconds,
             )
             if progress is not None:
-                progress.item(audio_id, current_step, 1, 1, "pixit done")
+                progress.item(audio_id, current_step, 1, 1, f"{diarization_config.get('backend', 'diarization')} done")
         else:
             segments = diarizer.diarize_chunks(
                 diarization_chunks,

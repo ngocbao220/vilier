@@ -89,6 +89,7 @@ VAD and diarization are core pipeline stages, so they always run; configure thei
 |---------|---------------|-------|
 | NVIDIA Sortformer | `diarization.backend=sortformer`, `diarization.model=nvidia/diar_sortformer_4spk-v1` | Uses `nemo.collections.asr.models.SortformerEncLabelModel`. VAD utterances are concatenated into speech-only files shorter than `diarization.max_chunk_seconds`, then diarization timestamps are mapped back to the original timeline. |
 | pyannote PixIT | `diarization.backend=pixit`, `diarization.model=pyannote/speech-separation-ami-1.0` | Runs on `audio.standardized.wav` directly. Install `pyannote.audio[separation]==3.3.2`, accept the Hugging Face conditions for the pyannote model, and set the token env configured by `diarization.token_env`, usually `HUGGINGFACE_TOKEN`. `diarization.device=auto` uses CUDA if available, then Apple MPS, then CPU. Set `diarization.device=mps` to force Apple GPU on macOS; unsupported MPS ops can still fall back to CPU through PyTorch. |
+| DiariZen | `diarization.backend=diarizen`, `diarization.model=BUT-FIT/diarizen-wavlm-large-s80-md` | Runs on `audio.standardized.wav` directly through `diarizen.pipelines.inference.DiariZenPipeline`. Install DiariZen from `https://github.com/BUTSpeechFIT/DiariZen` in the active environment before using this backend. Upstream releases the model weights under CC BY-NC 4.0, so treat them as research/non-commercial weights. |
 
 Example Sortformer config:
 
@@ -114,6 +115,20 @@ Example PixIT config:
     "model": "pyannote/speech-separation-ami-1.0",
     "token_env": "HUGGINGFACE_TOKEN",
     "device": "auto",
+    "min_duration_seconds": 0.25
+  }
+}
+```
+
+Example DiariZen config:
+
+```json
+{
+  "diarization": {
+    "backend": "diarizen",
+    "model": "BUT-FIT/diarizen-wavlm-large-s80-md",
+    "cache_dir": "",
+    "rttm_out_dir": "",
     "min_duration_seconds": 0.25
   }
 }
