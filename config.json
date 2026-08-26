@@ -1,6 +1,6 @@
 {
   "entrypoint": {
-    "input_path": "inputs/real.wav",
+    "input_path": "inputs/haveasip_khanhvi.mp3",
     "output_path": "outputs",
     "sample_rate": 16000
   },
