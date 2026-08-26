@@ -643,6 +643,32 @@ class TimelineTest(unittest.TestCase):
         self.assertEqual(diarizer.pipeline.sess_name, "meeting")
         self.assertEqual([(segment.start, segment.end, segment.speaker) for segment in segments], [(0.0, 1.0, "SPEAKER_00"), (1.2, 2.0, "SPEAKER_01")])
 
+    def test_diarizen_diarizer_default_load_matches_upstream_example(self):
+        class Pipeline:
+            calls = []
+
+            @classmethod
+            def from_pretrained(cls, *args, **kwargs):
+                cls.calls.append((args, kwargs))
+                return cls()
+
+        inference = types.ModuleType("diarizen.pipelines.inference")
+        inference.DiariZenPipeline = Pipeline
+        pipelines = types.ModuleType("diarizen.pipelines")
+        diarizen = types.ModuleType("diarizen")
+
+        with mock.patch.dict(
+            sys.modules,
+            {
+                "diarizen": diarizen,
+                "diarizen.pipelines": pipelines,
+                "diarizen.pipelines.inference": inference,
+            },
+        ):
+            DiariZenDiarizer({"model": "BUT-FIT/diarizen-wavlm-large-s80-md"})
+
+        self.assertEqual(Pipeline.calls, [(("BUT-FIT/diarizen-wavlm-large-s80-md",), {})])
+
     def test_import_diarizen_pipeline_retries_after_pyannote_audio_key_error(self):
         class Pipeline:
             pass

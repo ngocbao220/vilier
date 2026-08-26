@@ -323,10 +323,11 @@ class DiariZenDiarizer:
 
         DiariZenPipeline = _import_diarizen_pipeline()
 
-        kwargs = {
-            "cache_dir": self.cache_dir or None,
-            "rttm_out_dir": self.rttm_out_dir or None,
-        }
+        kwargs = {}
+        if self.cache_dir:
+            kwargs["cache_dir"] = self.cache_dir
+        if self.rttm_out_dir:
+            kwargs["rttm_out_dir"] = self.rttm_out_dir
         return DiariZenPipeline.from_pretrained(self.model_name, **kwargs)
 
     def _dry_run_segments(self, vad_segments: list[dict]) -> list[SpeakerSegment]:
