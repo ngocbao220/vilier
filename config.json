@@ -1,11 +1,12 @@
 {
   "entrypoint": {
-    "input_path": "inputs",
+    "input_path": "inputs/real.wav",
     "output_path": "outputs",
     "sample_rate": 16000
   },
   "runtime": {
-    "dry_run": false
+    "dry_run": false,
+    "backend": "local"
   },
   "logging": {
     "log_dir": "logs",
@@ -14,26 +15,48 @@
   "vad": {
     "backend": "silero",
     "model": "silero_vad",
-    "min_duration_seconds": 0.25,
+    "threshold": 0.2,
+    "min_duration_seconds": 0.15,
     "merge_gap_seconds": 0.2
   },
   "diarization": {
-    "backend": "sortformer",
-    "model": "nvidia/diar_sortformer_4spk-v1",
+    "backend": "pixit",
+    "model": "pyannote/speech-separation-ami-1.0",
+    "token_env": "HUGGINGFACE_TOKEN",
+    "device": "auto",
     "nemo_log_level": "ERROR",
     "min_duration_seconds": 0.25,
     "max_chunk_seconds": 180.0
   },
   "asr": {
-    "enabled": true,
+    "enabled": false,
+    "asr_backend": "local",
     "backend": "phowhisper_local",
     "model": "vinai/PhoWhisper-large",
     "language": "vi",
     "device": "cpu",
-    "chunk_length_seconds": 30.0
+    "chunk_length_seconds": 30.0,
+    "kaggle": {
+      "dataset_slug": "ngocbaotrinhtuan/vilier-asr-bundle",
+      "kernel_slug": "ngocbaotrinhtuan/vilier-phowhisper-asr",
+      "accelerator": "NvidiaTeslaT4",
+      "work_dir": ".kaggle_asr_work",
+      "poll_seconds": 30,
+      "max_wait_seconds": 21600,
+      "dataset_ready_seconds": 240
+    }
+  },
+  "kaggle": {
+    "dataset_slug": "ngocbaotrinhtuan/vilier-pipeline-bundle",
+    "kernel_slug": "ngocbaotrinhtuan/vilier-gpu-pipeline",
+    "accelerator": "NvidiaTeslaT4",
+    "work_dir": ".kaggle_pipeline_work",
+    "poll_seconds": 30,
+    "max_wait_seconds": 21600,
+    "dataset_ready_seconds": 240
   },
   "state_labeling": {
-    "enabled": true,
+    "enabled": false,
     "backend": "qwen",
     "model": "qwen3.8-max",
     "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
@@ -48,8 +71,18 @@
   "overlap": {
     "threshold_seconds": 0.05
   },
+  "music_separation": {
+    "enabled": false,
+    "backend": "demucs",
+    "model": "htdemucs",
+    "device": "cpu",
+    "shifts": 1,
+    "split": true,
+    "overlap": 0.25,
+    "residual_subtract": 0.5
+  },
   "overlap_separation": {
-    "enabled": true,
+    "enabled": false,
     "backend": "sepreformer",
     "sepreformer_path": "SepReformer",
     "model_name": "SepReformer_Base_WSJ0",

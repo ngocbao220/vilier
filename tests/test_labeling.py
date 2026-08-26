@@ -10,8 +10,10 @@ from pipeline.labeling import (
     DryRunLabelingRunner,
     QwenLabelingRunner,
     label_transcripts,
+    resolve_state_dir,
     write_state_outputs,
 )
+from pipeline.cli import state_dir_for_audio, state_dir_for_batch_log
 
 
 class FakeQwenClient:
@@ -119,6 +121,30 @@ class LabelingTest(unittest.TestCase):
             self.assertEqual(index[0]["state_audio"], "state/complete/complete_01.wav")
             sidecar = json.loads((root / "state" / "complete" / "complete_01.json").read_text(encoding="utf-8"))
             self.assertEqual(sidecar["transcript"], "xin chao")
+
+    def test_default_state_dir_is_nested_under_audio_output_dir(self):
+        state_dir = resolve_state_dir({"state_labeling": {"state_dir": "state"}})
+        output_dir = Path("/tmp/vilier/outputs/vi_one")
+
+        self.assertEqual(state_dir_for_audio(output_dir, state_dir), output_dir / "state")
+
+    def test_absolute_state_dir_override_is_preserved(self):
+        output_dir = Path("/tmp/vilier/outputs/vi_one")
+        state_dir = Path("/tmp/custom_state")
+
+        self.assertEqual(state_dir_for_audio(output_dir, state_dir), state_dir)
+
+    def test_relative_state_dir_override_is_nested_under_audio_output_dir(self):
+        state_dir = resolve_state_dir({"state_labeling": {"state_dir": "state"}}, state_dir_arg="state")
+        output_dir = Path("/tmp/vilier/outputs/vi_one")
+
+        self.assertEqual(state_dir_for_audio(output_dir, state_dir), output_dir / "state")
+
+    def test_batch_log_state_dir_uses_input_name_for_single_file(self):
+        output_root = Path("/tmp/vilier/outputs")
+        state_dir = Path("state")
+
+        self.assertEqual(state_dir_for_batch_log(output_root, state_dir, [Path("inputs/vi_one.wav")]), output_root / "vi_one" / "state")
 
 
 if __name__ == "__main__":

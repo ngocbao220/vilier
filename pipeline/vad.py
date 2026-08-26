@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
@@ -53,6 +54,7 @@ class SileroVadRunner:
             vad_audio,
             self.model.vad_model,
             sampling_rate=target_sr,
+            threshold=float(self.config.get("threshold", 0.5)),
         )
         segments = [{"start": ts["start"] / target_sr, "end": ts["end"] / target_sr} for ts in timestamps]
         return cleanup_intervals(
@@ -114,11 +116,20 @@ def write_vad_txt(path: Path, segments: list[dict], label: str = "speech") -> No
             handle.write(f"{start:.3f}\t{end:.3f}\t{label}\n")
 
 
-def export_vad_audio(waveform: np.ndarray, sample_rate: int, segments: list[dict], output_dir: Path) -> list[Path]:
+def export_vad_audio(
+    waveform: np.ndarray,
+    sample_rate: int,
+    segments: list[dict],
+    output_dir: Path,
+    progress_callback: Callable[[int, int, str], None] | None = None,
+) -> list[Path]:
     vad_audio_dir = output_dir / "vad_audio"
     vad_audio_dir.mkdir(parents=True, exist_ok=True)
     paths = []
+    total = len(segments)
     for idx, segment in enumerate(segments, start=1):
+        if progress_callback is not None:
+            progress_callback(idx, total, str(segment.get("id", f"vad_{idx - 1:05d}")))
         audio = slice_waveform(waveform, sample_rate, float(segment["start"]), float(segment["end"]))
         path = vad_audio_dir / f"audio_{idx}.wav"
         write_wav(path, audio, sample_rate)

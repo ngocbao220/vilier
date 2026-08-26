@@ -148,8 +148,12 @@ def load_labeling_runner(config: dict, dry_run: bool = False) -> LabelingRunner 
 
 
 def resolve_state_dir(config: dict, state_dir_arg: str = "") -> Path:
-    raw_state_dir = state_dir_arg or os.environ.get("STATE_DIR") or config.get("state_labeling", {}).get("state_dir", "state")
-    return Path(raw_state_dir).expanduser().resolve()
+    raw_override = state_dir_arg or os.environ.get("STATE_DIR")
+    if raw_override:
+        override = Path(raw_override).expanduser()
+        return override.resolve() if override.is_absolute() else override
+    raw_state_dir = config.get("state_labeling", {}).get("state_dir", "state")
+    return Path(raw_state_dir).expanduser()
 
 
 def label_transcripts(transcripts: list[dict], runner: LabelingRunner) -> list[dict]:

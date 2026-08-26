@@ -1,22 +1,69 @@
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
 import soundfile as sf
 
-from pipeline.diarization import build_diarization_chunks, remap_chunk_segments_to_original
-from pipeline.overlap_separation import _find_checkpoint_dir, _resolve_sepreformer_path, apply_overlap_separation
+from pipeline.diarization import (
+    _allow_torch_checkpoint_globals,
+    _load_pyannote_pipeline,
+    _speechbrain_device,
+    _speechbrain_use_auth_token_compat,
+    PyannotePixitDiarizer,
+    build_diarization_chunks,
+    pyannote_annotation_to_segments,
+    remap_chunk_segments_to_original,
+    resolve_torch_device,
+)
+from pipeline.music import _suppress_accompaniment, apply_music_separation, load_music_separator
+from pipeline.overlap_separation import _find_checkpoint_dir, _import_sepreformer_model_class, _resolve_sepreformer_path, apply_overlap_separation
 from pipeline.schema import SpeakerSegment
 from pipeline.timeline import annotate_overlaps, export_audacity_labels, export_segments_and_tracks, write_manifest
-from pipeline.vad import cleanup_intervals, export_vad_audio, write_vad_txt
-from pipeline.asr import DryRunAsrRunner, PhoWhisperLocalRunner, transcribe_vad_audio
+from pipeline.vad import SileroVadRunner, cleanup_intervals, export_vad_audio, write_vad_txt
+from pipeline.asr import (
+    DryRunAsrRunner,
+    PhoWhisperLocalRunner,
+    export_speaker_asr_audio,
+    normalize_pipeline_device,
+    transcribe_asr_segments,
+    transcribe_vad_audio,
+)
 from pipeline.audio import load_mono
 
 
 class TimelineTest(unittest.TestCase):
+    def test_normalize_pipeline_device_converts_numeric_strings(self):
+        self.assertEqual(normalize_pipeline_device("0"), 0)
+        self.assertEqual(normalize_pipeline_device("-1"), -1)
+        self.assertEqual(normalize_pipeline_device("cpu"), "cpu")
+
+    def test_resolve_torch_device_prefers_cuda_then_mps_for_auto(self):
+        torch_module = SimpleNamespace(
+            cuda=SimpleNamespace(is_available=lambda: False),
+            backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
+        )
+        self.assertEqual(resolve_torch_device(torch_module, "auto"), "mps")
+
+        torch_module.cuda.is_available = lambda: True
+        self.assertEqual(resolve_torch_device(torch_module, "auto"), "cuda")
+
+    def test_resolve_torch_device_falls_back_when_mps_unavailable(self):
+        torch_module = SimpleNamespace(
+            cuda=SimpleNamespace(is_available=lambda: False),
+            backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
+        )
+        with self.assertWarns(RuntimeWarning):
+            self.assertEqual(resolve_torch_device(torch_module, "mps"), "cpu")
+
+    def test_pixit_dry_run_reports_dry_run_device(self):
+        diarizer = PyannotePixitDiarizer({"backend": "pixit", "device": "auto"}, dry_run=True)
+        self.assertEqual(diarizer.resolved_device, "dry-run")
+
     def test_load_mono_falls_back_to_ffmpeg_when_soundfile_cannot_decode(self):
         with mock.patch("pipeline.audio.sf.read", side_effect=RuntimeError("bad codec")), mock.patch(
             "pipeline.audio.subprocess.check_output",
@@ -41,6 +88,34 @@ class TimelineTest(unittest.TestCase):
         self.assertEqual(len(cleaned), 1)
         self.assertEqual(cleaned[0]["start"], 1.0)
         self.assertEqual(cleaned[0]["end"], 2.0)
+
+    def test_silero_detect_passes_configured_threshold(self):
+        calls = []
+
+        class FakeModel:
+            vad_model = object()
+
+            def get_speech_timestamps(self, audio, model, **kwargs):
+                calls.append(kwargs)
+                return [{"start": 0, "end": 1600}]
+
+        runner = SileroVadRunner.__new__(SileroVadRunner)
+        runner.config = {"threshold": 0.35, "min_duration_seconds": 0.01, "merge_gap_seconds": 0.2}
+        runner.sample_rate = 16000
+        runner.model = FakeModel()
+
+        with mock.patch.dict(
+            sys.modules,
+            {
+                "models": SimpleNamespace(silero_vad=SimpleNamespace(SAMPLING_RATE=16000)),
+                "models.silero_vad": SimpleNamespace(SAMPLING_RATE=16000),
+                "librosa": SimpleNamespace(resample=lambda audio, orig_sr, target_sr: audio),
+            },
+        ):
+            segments = runner._silero_detect(np.zeros(16000, dtype=np.float32))
+
+        self.assertEqual(calls[0]["threshold"], 0.35)
+        self.assertEqual(segments, [{"id": "vad_00000", "start": 0.0, "end": 0.1}])
 
     def test_overlap_grouping(self):
         segments = [
@@ -88,6 +163,44 @@ class TimelineTest(unittest.TestCase):
             self.assertEqual(len(data["segments"]), 2)
             self.assertEqual(data["vad_segments"], [{"id": "vad_00000", "start": 0.0, "end": 1.5, "duration": 1.5}])
 
+    def test_apply_music_separation_writes_cleaned_audio(self):
+        class FakeMusicSeparator:
+            def separate_music(self, waveform, sample_rate):
+                return waveform * 0.5
+
+        sample_rate = 10
+        waveform = np.ones(sample_rate, dtype=np.float32)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            result = apply_music_separation(waveform, sample_rate, out, FakeMusicSeparator())
+
+            self.assertTrue(result["applied"])
+            self.assertEqual(result["audio"], "music_cleaned.wav")
+            np.testing.assert_allclose(result["waveform"], 0.5, atol=1e-4)
+            audio, sr = sf.read(out / "music_cleaned.wav", dtype="float32")
+            self.assertEqual(sr, sample_rate)
+            np.testing.assert_allclose(audio, 0.5, atol=1e-4)
+
+    def test_load_music_separator_dry_run_uses_noop_separator(self):
+        sample_rate = 10
+        waveform = np.linspace(-0.5, 0.5, sample_rate, dtype=np.float32)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            separator = load_music_separator({"enabled": True, "backend": "demucs"}, dry_run=True)
+            result = apply_music_separation(waveform, sample_rate, out, separator)
+
+            self.assertTrue(result["applied"])
+            np.testing.assert_allclose(result["waveform"], waveform)
+            self.assertTrue((out / "music_cleaned.wav").exists())
+
+    def test_suppress_accompaniment_subtracts_residual_music(self):
+        vocals = np.array([0.8, 0.2, -0.4], dtype=np.float32)
+        accompaniment = np.array([0.2, -0.2, -0.2], dtype=np.float32)
+
+        cleaned = _suppress_accompaniment(vocals, accompaniment, strength=0.5)
+
+        np.testing.assert_allclose(cleaned, np.array([0.7, 0.3, -0.3], dtype=np.float32), atol=1e-6)
+
     def test_manifest_preserves_transcript_records(self):
         sample_rate = 16000
         waveform = np.zeros(sample_rate, dtype=np.float32)
@@ -119,10 +232,12 @@ class TimelineTest(unittest.TestCase):
                 segments,
                 tracks,
                 [{"id": "vad_00000", "start": 0.0, "end": 1.0}],
+                music_separation={"enabled": True, "applied": True, "audio": "music_cleaned.wav"},
                 transcript=transcript,
             )
             data = json.loads(manifest.read_text())
             self.assertEqual(data["transcript"], transcript)
+            self.assertEqual(data["music_separation"]["audio"], "music_cleaned.wav")
 
     def test_transcribe_vad_audio_assigns_largest_overlap_speaker(self):
         sample_rate = 16000
@@ -148,6 +263,75 @@ class TimelineTest(unittest.TestCase):
             self.assertEqual(transcript[0]["start"], 1.0)
             self.assertEqual(transcript[0]["end"], 3.0)
             self.assertEqual(transcript[0]["text"], "dry-run transcript 1")
+
+    def test_export_speaker_asr_audio_segments_speaker_tracks(self):
+        class FakeVadRunner:
+            def detect(self, waveform):
+                if np.max(np.abs(waveform)) < 0.05:
+                    return []
+                return [{"id": "vad_00000", "start": 0.5, "end": 1.0}]
+
+        sample_rate = 10
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            tracks_dir = out / "tracks"
+            tracks_dir.mkdir()
+            speaker_00 = np.zeros(sample_rate * 2, dtype=np.float32)
+            speaker_00[5:10] = 0.4
+            sf.write(tracks_dir / "SPEAKER_00.wav", speaker_00, sample_rate)
+            sf.write(tracks_dir / "SPEAKER_01.wav", np.zeros(sample_rate * 2, dtype=np.float32), sample_rate)
+
+            asr_segments = export_speaker_asr_audio(
+                output_dir=out,
+                speaker_tracks=[
+                    {"id": "SPEAKER_00", "track_wav": "tracks/SPEAKER_00.wav"},
+                    {"id": "SPEAKER_01", "track_wav": "tracks/SPEAKER_01.wav"},
+                ],
+                vad_runner=FakeVadRunner(),
+            )
+
+            self.assertEqual(
+                asr_segments,
+                [
+                    {
+                        "id": "asrseg_00000",
+                        "speaker": "SPEAKER_00",
+                        "start": 0.5,
+                        "end": 1.0,
+                        "duration": 0.5,
+                        "audio": "asr_audio/SPEAKER_00/audio_00001.wav",
+                    }
+                ],
+            )
+            audio, sr = sf.read(out / "asr_audio" / "SPEAKER_00" / "audio_00001.wav", dtype="float32")
+            self.assertEqual(sr, sample_rate)
+            self.assertEqual(len(audio), 5)
+
+    def test_transcribe_asr_segments_uses_speaker_audio(self):
+        sample_rate = 16000
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            asr_dir = out / "asr_audio" / "SPEAKER_00"
+            asr_dir.mkdir(parents=True)
+            sf.write(asr_dir / "audio_00001.wav", np.zeros(sample_rate, dtype=np.float32), sample_rate)
+            transcript = transcribe_asr_segments(
+                output_dir=out,
+                asr_segments=[
+                    {
+                        "id": "asrseg_00000",
+                        "speaker": "SPEAKER_00",
+                        "start": 0.0,
+                        "end": 1.0,
+                        "audio": "asr_audio/SPEAKER_00/audio_00001.wav",
+                    }
+                ],
+                runner=DryRunAsrRunner(model_name="vinai/PhoWhisper-large", language="vi"),
+            )
+
+            self.assertEqual(transcript[0]["asr_segment_id"], "asrseg_00000")
+            self.assertEqual(transcript[0]["audio"], "asr_audio/SPEAKER_00/audio_00001.wav")
+            self.assertEqual(transcript[0]["speaker"], "SPEAKER_00")
+            self.assertNotIn("vad_id", transcript[0])
 
     def test_phowhisper_runner_passes_loaded_audio_array_to_pipeline(self):
         class FakePipeline:
@@ -319,6 +503,156 @@ class TimelineTest(unittest.TestCase):
             self.assertTrue((out / "diarization_chunks" / "chunk_1.wav").exists())
             self.assertTrue((out / "diarization_chunks" / "chunk_2.wav").exists())
 
+    def test_pyannote_annotation_to_segments_normalizes_speakers(self):
+        class Turn:
+            def __init__(self, start, end):
+                self.start = start
+                self.end = end
+
+        class Annotation:
+            def itertracks(self, yield_label=False):
+                self.assertTrue(yield_label)
+                yield Turn(1.0, 2.0), None, "speaker_b"
+                yield Turn(0.0, 0.1), None, "speaker_short"
+                yield Turn(0.2, 0.8), None, "speaker_a"
+
+        annotation = Annotation()
+        annotation.assertTrue = self.assertTrue
+
+        segments = pyannote_annotation_to_segments(annotation, min_duration=0.25)
+
+        self.assertEqual([(segment.start, segment.end, segment.speaker) for segment in segments], [(0.2, 0.8, "SPEAKER_00"), (1.0, 2.0, "SPEAKER_01")])
+
+    def test_allow_torch_checkpoint_globals_registers_required_classes(self):
+        class TorchVersion:
+            pass
+
+        class Specifications:
+            pass
+
+        class Serialization:
+            calls = []
+
+            @classmethod
+            def add_safe_globals(cls, globals_to_add):
+                cls.calls.append(globals_to_add)
+
+        TorchModule = SimpleNamespace(
+            torch_version=SimpleNamespace(TorchVersion=TorchVersion),
+            serialization=Serialization,
+        )
+
+        _allow_torch_checkpoint_globals(TorchModule, extra_globals=[Specifications])
+
+        self.assertIn(TorchVersion, Serialization.calls[0])
+        self.assertIn(Specifications, Serialization.calls[0])
+
+    def test_load_pyannote_pipeline_omits_auth_when_token_is_empty(self):
+        class Pipeline:
+            calls = []
+
+            @classmethod
+            def from_pretrained(cls, *args, **kwargs):
+                cls.calls.append((args, kwargs))
+                return "pipeline"
+
+        self.assertEqual(_load_pyannote_pipeline(Pipeline, "pyannote/model", None), "pipeline")
+        self.assertEqual(Pipeline.calls, [(("pyannote/model",), {})])
+
+    def test_load_pyannote_pipeline_retries_without_unsupported_auth_kwarg(self):
+        class Pipeline:
+            calls = []
+
+            @classmethod
+            def from_pretrained(cls, *args, **kwargs):
+                cls.calls.append((args, kwargs))
+                if "use_auth_token" in kwargs:
+                    raise TypeError("Pretrained.__init__() got an unexpected keyword argument 'use_auth_token'")
+                return "pipeline"
+
+        self.assertEqual(_load_pyannote_pipeline(Pipeline, "pyannote/model", "hf_token"), "pipeline")
+        self.assertEqual(
+            Pipeline.calls,
+            [
+                (("pyannote/model",), {"use_auth_token": "hf_token"}),
+                (("pyannote/model",), {}),
+            ],
+        )
+
+    def test_speechbrain_compat_removes_unsupported_kwargs(self):
+        try:
+            from speechbrain.inference.speaker import EncoderClassifier
+        except Exception:
+            self.skipTest("speechbrain is not installed")
+
+        original = EncoderClassifier.from_hparams
+        calls = []
+
+        class FakeDevice:
+            def __str__(self):
+                return "cpu"
+
+        def fake_from_hparams(*args, **kwargs):
+            calls.append((args, kwargs))
+            if "use_auth_token" in kwargs:
+                raise TypeError("Pretrained.__init__() got an unexpected keyword argument 'use_auth_token'")
+            if "revision" in kwargs:
+                raise TypeError("Pretrained.__init__() got an unexpected keyword argument 'revision'")
+            self.assertEqual(kwargs["run_opts"]["device"], "cpu")
+            return "classifier"
+
+        EncoderClassifier.from_hparams = fake_from_hparams
+        try:
+            with _speechbrain_use_auth_token_compat():
+                result = EncoderClassifier.from_hparams(
+                    source="speechbrain/model",
+                    run_opts={"device": FakeDevice()},
+                    use_auth_token="hf_token",
+                    revision="main",
+                )
+        finally:
+            EncoderClassifier.from_hparams = original
+
+        self.assertEqual(result, "classifier")
+        self.assertEqual(calls[0][1]["run_opts"], {"device": "cpu"})
+        self.assertIn("use_auth_token", calls[0][1])
+        self.assertIn("revision", calls[0][1])
+        self.assertEqual(calls[1][1]["run_opts"], {"device": "cpu"})
+        self.assertNotIn("use_auth_token", calls[1][1])
+        self.assertIn("revision", calls[1][1])
+        self.assertEqual(calls[2][1]["run_opts"], {"device": "cpu"})
+        self.assertNotIn("use_auth_token", calls[2][1])
+        self.assertNotIn("revision", calls[2][1])
+
+    def test_speechbrain_compat_maps_mps_device_to_cpu(self):
+        try:
+            from speechbrain.inference.speaker import EncoderClassifier
+        except Exception:
+            self.skipTest("speechbrain is not installed")
+
+        original = EncoderClassifier.from_hparams
+        calls = []
+
+        def fake_from_hparams(*args, **kwargs):
+            calls.append((args, kwargs))
+            self.assertEqual(kwargs["run_opts"]["device"], "cpu")
+            return "classifier"
+
+        EncoderClassifier.from_hparams = fake_from_hparams
+        try:
+            with _speechbrain_use_auth_token_compat():
+                result = EncoderClassifier.from_hparams(source="speechbrain/model", run_opts={"device": "mps"})
+        finally:
+            EncoderClassifier.from_hparams = original
+
+        self.assertEqual(result, "classifier")
+        self.assertEqual(calls[0][1]["run_opts"], {"device": "cpu"})
+
+    def test_speechbrain_device_maps_mps_to_cpu(self):
+        self.assertEqual(_speechbrain_device("mps"), "cpu")
+        self.assertEqual(_speechbrain_device("mps:0"), "cpu")
+        self.assertEqual(_speechbrain_device("cuda:0"), "cuda:0")
+
     def test_remap_chunk_segments_to_original_splits_across_concatenated_vad_boundaries(self):
         chunk_segments = [SpeakerSegment("local", "SPEAKER_00", 0.5, 2.5)]
         mapping = [
@@ -375,6 +709,34 @@ class TimelineTest(unittest.TestCase):
             (checkpoint_dir / "model.pth").write_bytes(b"placeholder")
 
             self.assertEqual(_find_checkpoint_dir(root, "SepReformer_Large_DM_WSJ0"), checkpoint_dir)
+
+    def test_sepreformer_import_ignores_existing_models_and_utils_packages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_root = Path(tmp)
+            (fake_root / "models").mkdir()
+            (fake_root / "models" / "__init__.py").write_text("", encoding="utf-8")
+            (fake_root / "utils").mkdir()
+            (fake_root / "utils" / "__init__.py").write_text("", encoding="utf-8")
+
+            saved_modules = {name: sys.modules.get(name) for name in ("models", "utils")}
+            with mock.patch.object(sys, "path", [str(fake_root), *sys.path]):
+                try:
+                    for name in ("models", "utils"):
+                        sys.modules.pop(name, None)
+                    import models
+                    import utils
+
+                    self.assertEqual(Path(models.__file__).parent, fake_root / "models")
+                    self.assertEqual(Path(utils.__file__).parent, fake_root / "utils")
+
+                    Model = _import_sepreformer_model_class(Path("SepReformer").resolve(), "SepReformer_Base_WSJ0", {})
+
+                    self.assertEqual(Model.__name__, "Model")
+                finally:
+                    for name in ("models", "utils"):
+                        sys.modules.pop(name, None)
+                        if saved_modules[name] is not None:
+                            sys.modules[name] = saved_modules[name]
 
     def test_track_export_uses_overlap_separated_segment_audio(self):
         sample_rate = 10

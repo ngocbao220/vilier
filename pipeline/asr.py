@@ -6,7 +6,9 @@ from typing import Callable, Protocol
 import numpy as np
 import soundfile as sf
 
+from .audio import slice_waveform, write_wav
 from .schema import SpeakerSegment
+from .schema import relative_path
 
 
 class AsrRunner(Protocol):
@@ -30,7 +32,7 @@ class PhoWhisperLocalRunner:
     def __init__(self, config: dict):
         self.model_name = str(config.get("model", "vinai/PhoWhisper-large"))
         self.language = str(config.get("language", "vi"))
-        self.device = config.get("device", "cpu")
+        self.device = normalize_pipeline_device(config.get("device", "cpu"))
         self.chunk_length_seconds = config.get("chunk_length_seconds", 30.0)
         self._pipeline = None
 
@@ -85,6 +87,15 @@ def load_asr_runner(config: dict, dry_run: bool = False) -> AsrRunner | None:
     return PhoWhisperLocalRunner(asr_config)
 
 
+def normalize_pipeline_device(device):
+    if isinstance(device, str):
+        stripped = device.strip()
+        if stripped.lstrip("-").isdigit():
+            return int(stripped)
+        return stripped
+    return device
+
+
 def transcribe_vad_audio(
     output_dir: Path,
     vad_segments: list[dict],
@@ -119,6 +130,92 @@ def transcribe_vad_audio(
             }
         )
     return transcript
+
+
+def export_speaker_asr_audio(
+    output_dir: Path,
+    speaker_tracks: list,
+    vad_runner,
+    progress_callback: Callable[[int, int, str], None] | None = None,
+) -> list[dict]:
+    asr_segments = []
+    global_idx = 0
+    total = len(speaker_tracks)
+    for track_idx, track in enumerate(speaker_tracks, start=1):
+        speaker = _track_speaker(track)
+        if progress_callback is not None:
+            progress_callback(track_idx, total, speaker)
+        track_path = output_dir / _track_audio(track)
+        audio, sample_rate = sf.read(track_path, dtype="float32", always_2d=False)
+        if getattr(audio, "ndim", 1) > 1:
+            audio = audio.mean(axis=1)
+        audio = np.asarray(audio, dtype=np.float32)
+        detected = vad_runner.detect(audio)
+        speaker_dir = output_dir / "asr_audio" / speaker
+        speaker_dir.mkdir(parents=True, exist_ok=True)
+        for speaker_idx, segment in enumerate(detected, start=1):
+            start = round(float(segment["start"]), 3)
+            end = round(float(segment["end"]), 3)
+            if end <= start:
+                continue
+            path = speaker_dir / f"audio_{speaker_idx:05d}.wav"
+            write_wav(path, slice_waveform(audio, sample_rate, start, end), sample_rate)
+            asr_segments.append(
+                {
+                    "id": f"asrseg_{global_idx:05d}",
+                    "speaker": speaker,
+                    "start": start,
+                    "end": end,
+                    "duration": round(end - start, 6),
+                    "audio": relative_path(path, output_dir),
+                }
+            )
+            global_idx += 1
+    return sorted(asr_segments, key=lambda item: (float(item["start"]), float(item["end"]), str(item["speaker"])))
+
+
+def transcribe_asr_segments(
+    output_dir: Path,
+    asr_segments: list[dict],
+    runner: AsrRunner,
+    progress_callback: Callable[[int, int, str], None] | None = None,
+) -> list[dict]:
+    transcript = []
+    total = len(asr_segments)
+    for idx, segment in enumerate(asr_segments, start=1):
+        audio_rel_path = Path(str(segment["audio"]))
+        audio_path = output_dir / audio_rel_path
+        if progress_callback is not None:
+            progress_callback(idx, total, str(audio_rel_path))
+        start = round(float(segment["start"]), 3)
+        end = round(float(segment["end"]), 3)
+        transcript.append(
+            {
+                "id": f"asr_{idx - 1:05d}",
+                "asr_segment_id": str(segment.get("id", "")),
+                "audio": str(audio_rel_path),
+                "start": start,
+                "end": end,
+                "duration": round(end - start, 6),
+                "speaker": str(segment.get("speaker", "SPEAKER_UNKNOWN")),
+                "text": _transcribe_one(runner, audio_path, idx, str(segment.get("id", "")), str(audio_rel_path)),
+                "model": runner.model_name,
+                "language": runner.language,
+            }
+        )
+    return transcript
+
+
+def _track_speaker(track) -> str:
+    if isinstance(track, dict):
+        return str(track.get("id", track.get("speaker", "SPEAKER_UNKNOWN")))
+    return str(getattr(track, "id", getattr(track, "speaker", "SPEAKER_UNKNOWN")))
+
+
+def _track_audio(track) -> Path:
+    if isinstance(track, dict):
+        return Path(str(track.get("track_wav", track.get("audio", ""))))
+    return Path(str(getattr(track, "track_wav", getattr(track, "audio", ""))))
 
 
 def _transcribe_one(runner: AsrRunner, audio_path: Path, index: int, vad_id: str, audio_rel_path: str) -> str:

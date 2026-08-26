@@ -11,6 +11,8 @@ OUTPUT_PATH="${OUTPUT_PATH:-}"
 LOG_DIR="${LOG_DIR:-}"
 STATE_DIR="${STATE_DIR:-}"
 DRY_RUN="${DRY_RUN:-0}"
+PHASE_UNTIL="${PHASE_UNTIL:-}"
+PHASE_FROM="${PHASE_FROM:-}"
 
 export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/vilier_mplconfig}"
 export NUMBA_CACHE_DIR="${NUMBA_CACHE_DIR:-/tmp/vilier_numba_cache}"
@@ -27,6 +29,12 @@ if [[ -n "${LOG_DIR}" ]]; then
 fi
 if [[ -n "${STATE_DIR}" ]]; then
   args+=(--state-dir "${STATE_DIR}")
+fi
+if [[ -n "${PHASE_UNTIL}" ]]; then
+  args+=(--until "${PHASE_UNTIL}")
+fi
+if [[ -n "${PHASE_FROM}" ]]; then
+  args+=(--from "${PHASE_FROM}")
 fi
 if [[ "${DRY_RUN}" == "1" ]]; then
   args+=(--dry-run)

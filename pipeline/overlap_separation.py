@@ -1,6 +1,8 @@
 from pathlib import Path
 import importlib
 import sys
+import types
+from typing import Callable
 
 import numpy as np
 
@@ -13,6 +15,7 @@ def apply_overlap_separation(
     segments: list[SpeakerSegment],
     separator,
     overlap_threshold: float,
+    progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> dict:
     if separator is None:
         return {"segment_audio": {}, "overlap_regions": []}
@@ -23,7 +26,10 @@ def apply_overlap_separation(
 
     separated_regions: dict[str, list[dict]] = {segment.id: [] for segment in segments}
     overlap_regions = []
-    for pair in pairs:
+    total = len(pairs)
+    for pair_idx, pair in enumerate(pairs, start=1):
+        if progress_callback is not None:
+            progress_callback(pair_idx, total, f"{pair['seg1'].speaker}+{pair['seg2'].speaker}")
         start = pair["start"]
         end = pair["end"]
         start_idx = int(round(start * sample_rate))
@@ -114,16 +120,11 @@ class SepReformerSeparator:
             raise FileNotFoundError(f"SepReformer path not found: {self.sepreformer_path}")
 
         original_sys_path = sys.path.copy()
-        cleared_modules = {}
+        restored_modules = {}
         try:
             if str(self.sepreformer_path) not in sys.path:
                 sys.path.insert(0, str(self.sepreformer_path))
-            for module_name in list(sys.modules):
-                if module_name == "models" or module_name == "utils" or module_name.startswith("models.") or module_name.startswith("utils."):
-                    cleared_modules[module_name] = sys.modules[module_name]
-                    del sys.modules[module_name]
-            model_module = importlib.import_module(f"models.{self.model_name}.model")
-            Model = model_module.Model
+            Model = _import_sepreformer_model_class(self.sepreformer_path, self.model_name, restored_modules)
 
             config_path = self.sepreformer_path / "models" / self.model_name / "configs.yaml"
             with config_path.open("r", encoding="utf-8") as handle:
@@ -139,7 +140,10 @@ class SepReformerSeparator:
             self.model.eval()
         finally:
             sys.path = original_sys_path
-            for module_name, module in cleared_modules.items():
+            for module_name in list(sys.modules):
+                if module_name == "utils" or module_name.startswith("utils."):
+                    del sys.modules[module_name]
+            for module_name, module in restored_modules.items():
                 sys.modules[module_name] = module
 
     def separate(self, audio_segment: np.ndarray, sample_rate: int):
@@ -173,6 +177,36 @@ def _resolve_sepreformer_path(configured_path: str | Path) -> Path:
         if resolved.exists():
             return resolved
     return candidates[-1].resolve()
+
+
+def _import_sepreformer_model_class(sepreformer_path: Path, model_name: str, restored_modules: dict | None = None):
+    restored_modules = restored_modules if restored_modules is not None else {}
+    model_root = sepreformer_path / "models"
+    utils_root = sepreformer_path / "utils"
+    if not (model_root / model_name / "model.py").exists():
+        raise ModuleNotFoundError(f"SepReformer model file not found: {model_root / model_name / 'model.py'}")
+    if not (utils_root / "decorators.py").exists():
+        raise ModuleNotFoundError(f"SepReformer utils file not found: {utils_root / 'decorators.py'}")
+
+    for module_name in list(sys.modules):
+        if module_name == "utils" or module_name.startswith("utils."):
+            restored_modules.setdefault(module_name, sys.modules[module_name])
+            del sys.modules[module_name]
+
+    utils_pkg = types.ModuleType("utils")
+    utils_pkg.__path__ = [str(utils_root)]
+    sys.modules["utils"] = utils_pkg
+
+    alias = "_vilier_sepreformer_models"
+    alias_pkg = sys.modules.get(alias)
+    if alias_pkg is None:
+        alias_pkg = types.ModuleType(alias)
+        sys.modules[alias] = alias_pkg
+    alias_pkg.__path__ = [str(model_root)]
+    importlib.invalidate_caches()
+
+    module = importlib.import_module(f"{alias}.{model_name}.model")
+    return module.Model
 
 
 def _validate_model_name(model_name: str) -> str:

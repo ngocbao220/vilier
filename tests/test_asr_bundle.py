@@ -15,15 +15,24 @@ class AsrBundleTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             bundle = root / "outputs" / "sample"
-            vad_dir = bundle / "vad_audio"
-            vad_dir.mkdir(parents=True)
-            sf.write(vad_dir / "audio_1.wav", np.zeros(sample_rate, dtype=np.float32), sample_rate)
+            asr_dir = bundle / "asr_audio" / "SPEAKER_00"
+            asr_dir.mkdir(parents=True)
+            sf.write(asr_dir / "audio_00001.wav", np.zeros(sample_rate, dtype=np.float32), sample_rate)
             (bundle / "manifest.timeline.json").write_text(
                 json.dumps(
                     {
                         "audio_id": "sample",
                         "vad_segments": [{"id": "vad_00000", "start": 0.0, "end": 1.0, "duration": 1.0}],
-                        "vad_audio": ["vad_audio/audio_1.wav"],
+                        "asr_segments": [
+                            {
+                                "id": "asrseg_00000",
+                                "speaker": "SPEAKER_00",
+                                "start": 0.0,
+                                "end": 1.0,
+                                "duration": 1.0,
+                                "audio": "asr_audio/SPEAKER_00/audio_00001.wav",
+                            }
+                        ],
                         "segments": [{"id": "seg_00000", "speaker": "SPEAKER_00", "start": 0.0, "end": 1.0}],
                     }
                 ),
@@ -60,6 +69,8 @@ class AsrBundleTest(unittest.TestCase):
             transcript = json.loads((bundle / "transcript.json").read_text(encoding="utf-8"))
             self.assertEqual(transcript[0]["text"], "dry-run transcript 1")
             self.assertEqual(transcript[0]["speaker"], "SPEAKER_00")
+            self.assertEqual(transcript[0]["asr_segment_id"], "asrseg_00000")
+            self.assertEqual(transcript[0]["audio"], "asr_audio/SPEAKER_00/audio_00001.wav")
 
 
 if __name__ == "__main__":

@@ -8,15 +8,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from pipeline.asr import load_asr_runner, transcribe_vad_audio, write_transcript_json
-from pipeline.cli import load_config
+from pipeline.asr import load_asr_runner, transcribe_asr_segments, transcribe_vad_audio, write_transcript_json
 from pipeline.schema import SpeakerSegment
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run ASR only on a prepared Vilier output bundle")
     parser.add_argument("--config", default="config.json")
-    parser.add_argument("--bundle-dir", required=True, help="Directory containing vad_audio/, vad.json, and manifest.timeline.json")
+    parser.add_argument("--bundle-dir", required=True, help="Directory containing asr_audio/ or vad_audio/, plus manifest.timeline.json")
     parser.add_argument("--output-dir", default="", help="Where to write transcript.json; defaults to bundle-dir")
     parser.add_argument("--device", default="", help="Override config asr.device, e.g. 0 on Kaggle GPU")
     parser.add_argument("--dry-run", action="store_true")
@@ -34,13 +33,16 @@ def main() -> int:
         raise ValueError("ASR is disabled in config")
 
     manifest = _read_json(bundle_dir / "manifest.timeline.json")
-    vad_segments = manifest.get("vad_segments") or _read_json(bundle_dir / "vad.json")
-    vad_audio = [Path(path) for path in manifest.get("vad_audio", [])]
-    if not vad_audio:
-        vad_audio = sorted(Path("vad_audio") / path.name for path in (bundle_dir / "vad_audio").glob("*.wav"))
-    speaker_segments = [_speaker_segment(item) for item in manifest.get("segments", [])]
-
-    transcript = transcribe_vad_audio(bundle_dir, vad_segments, vad_audio, speaker_segments, runner)
+    asr_segments = manifest.get("asr_segments", [])
+    if asr_segments:
+        transcript = transcribe_asr_segments(bundle_dir, asr_segments, runner)
+    else:
+        vad_segments = manifest.get("vad_segments") or _read_json(bundle_dir / "vad.json")
+        vad_audio = [Path(path) for path in manifest.get("vad_audio", [])]
+        if not vad_audio:
+            vad_audio = sorted(Path("vad_audio") / path.name for path in (bundle_dir / "vad_audio").glob("*.wav"))
+        speaker_segments = [_speaker_segment(item) for item in manifest.get("segments", [])]
+        transcript = transcribe_vad_audio(bundle_dir, vad_segments, vad_audio, speaker_segments, runner)
     transcript_path = output_dir / "transcript.json"
     write_transcript_json(transcript_path, transcript)
     (output_dir / "asr_result.json").write_text(
@@ -63,6 +65,11 @@ def main() -> int:
 
 
 def _read_json(path: Path):
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def load_config(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
 

@@ -2,18 +2,19 @@
 
 Vilier creates speaker-aligned audio artifacts from raw Vietnamese conversation audio.
 
-Version 1 focuses only on speaker splitting and timeline reconstruction:
+Version 1 focuses only on speaker splitting and timeline reconstruction. Model choices are configured in `config.json`; the code is not tied to one diarization or separation model:
 
 - Silero VAD for local speech activity detection.
-- Speech-only diarization chunks built from consecutive VAD utterances.
-- NVIDIA Sortformer for speaker diarization.
+- NVIDIA Sortformer or pyannote.audio PixIT for speaker diarization.
+- Speech-only diarization chunks built from consecutive VAD utterances when Sortformer is selected.
+- Optional Demucs vocal extraction before SepReformer overlap separation.
 - Local PhoWhisper Large ASR for Vietnamese transcripts.
-- Qwen transcript-based state labeling for VAD utterances.
+- Qwen transcript-based state labeling for speaker-channel ASR segments.
 - Full-duration per-speaker tracks that can be played in parallel.
 - Optional per-speaker segment WAV files.
 - Audacity-compatible label files for VAD and speaker segments.
 
-Transcript runs after VAD and diarization. Each VAD utterance is transcribed with `vinai/PhoWhisper-large`, then assigned to the diarized speaker with the largest time overlap.
+Transcript runs after VAD and diarization. Optional Demucs music separation can clean the waveform before SepReformer, speaker-track export, and ASR. After speaker tracks are exported, a second VAD pass segments each speaker channel for `vinai/PhoWhisper-large` ASR and Qwen labeling.
 State labeling runs after ASR. Qwen receives transcript text only and assigns one configured label, initially `complete` or `incomplete`.
 
 ## Layout
@@ -28,7 +29,7 @@ vilier/
 
 ## Run A Smoke Test Without Heavy Models
 
-Dry-run mode uses deterministic adapters and does not load Sortformer.
+Dry-run mode uses deterministic adapters and does not load Sortformer, PixIT, SepReformer, PhoWhisper, or Qwen.
 It also writes placeholder ASR text, so use it only to test file flow and timeline contracts.
 
 ```bash
@@ -36,30 +37,200 @@ PYTHON_BIN=/opt/anaconda3/envs/sommelier/bin/python \
 DRY_RUN=1 \
 INPUT_PATH=inputs/vi_conv_sample_5min.mp3 \
 OUTPUT_PATH=output/ \
-STATE_DIR=/tmp/vilier_state_smoke \
 bash run_pipeline.sh
 ```
 
-## Run With Silero VAD + NVIDIA Sortformer
+## Run With Configured Models
+
+`run.sh` reads `entrypoint.input_path` from `config.json`. Set it to one audio file to process only that file:
+
+```json
+{
+  "entrypoint": {
+    "input_path": "inputs/haveasip_khanhvi_5m_2.wav",
+    "output_path": "outputs"
+  }
+}
+```
 
 ```bash
-PYTHON_BIN=/opt/anaconda3/envs/sommelier/bin/python \
-INPUT_PATH=/path/to/audio_or_folder \
-OUTPUT_PATH=outputs \
-STATE_DIR=state \
-bash run_pipeline.sh
+bash run.sh
 ```
 
-The default Sortformer model is `nvidia/diar_sortformer_4spk-v1`.
-The default ASR model is `vinai/PhoWhisper-large`, loaded locally through Hugging Face Transformers. The first non-dry run downloads the model into the local Hugging Face cache; later runs reuse the cached model.
-The default state labeling backend is Qwen through DashScope/OpenAI-compatible chat completions. Set `DASHSCOPE_API_KEY` before non-dry runs.
-By default, VAD utterances are concatenated into speech-only files shorter than `diarization.max_chunk_seconds` before diarization. The default is `180.0` seconds.
+For a one-off run without editing config, `INPUT_PATH=/path/to/audio.wav bash run.sh` still overrides the config value. If `entrypoint.input_path` points to a folder, the pipeline processes every supported audio file in that folder.
+
+The current `config.json` selects one set of models for a run, but each stage can be changed independently.
+VAD and diarization are core pipeline stages, so they always run; configure their backend/model/device in `vad` and `diarization`. Optional stages are controlled by `*.enabled`: `music_separation`, `overlap_separation`, `asr`, and `state_labeling`.
+
+## Model Choices
+
+### Diarization
+
+| Backend | Config values | Notes |
+|---------|---------------|-------|
+| NVIDIA Sortformer | `diarization.backend=sortformer`, `diarization.model=nvidia/diar_sortformer_4spk-v1` | Uses `nemo.collections.asr.models.SortformerEncLabelModel`. VAD utterances are concatenated into speech-only files shorter than `diarization.max_chunk_seconds`, then diarization timestamps are mapped back to the original timeline. |
+| pyannote PixIT | `diarization.backend=pixit`, `diarization.model=pyannote/speech-separation-ami-1.0` | Runs on `audio.standardized.wav` directly. Install `pyannote.audio[separation]==3.3.2`, accept the Hugging Face conditions for the pyannote model, and set the token env configured by `diarization.token_env`, usually `HUGGINGFACE_TOKEN`. `diarization.device=auto` uses CUDA if available, then Apple MPS, then CPU. Set `diarization.device=mps` to force Apple GPU on macOS; unsupported MPS ops can still fall back to CPU through PyTorch. |
+
+Example Sortformer config:
+
+```json
+{
+  "diarization": {
+    "backend": "sortformer",
+    "model": "nvidia/diar_sortformer_4spk-v1",
+    "device": "cpu",
+    "nemo_log_level": "ERROR",
+    "min_duration_seconds": 0.25,
+    "max_chunk_seconds": 180.0
+  }
+}
+```
+
+Example PixIT config:
+
+```json
+{
+  "diarization": {
+    "backend": "pixit",
+    "model": "pyannote/speech-separation-ami-1.0",
+    "token_env": "HUGGINGFACE_TOKEN",
+    "device": "auto",
+    "min_duration_seconds": 0.25
+  }
+}
+```
+
+### Music Separation
+
+| Backend | Config values | Notes |
+|---------|---------------|-------|
+| Disabled | `music_separation.enabled=false` | Keeps the standardized waveform unchanged. |
+| Demucs | `music_separation.enabled=true`, `music_separation.backend=demucs`, `music_separation.model=htdemucs` | Extracts vocals before SepReformer overlap separation. Increase `music_separation.residual_subtract` gradually if accompaniment still leaks into `music_cleaned.wav`; higher values can distort speech. |
+
+### Overlap Separation
+
+SepReformer is optional. If `overlap_separation.enabled=false`, overlapping regions remain unchanged and the pipeline still exports diarization labels and speaker tracks.
+
+| Backend | Config values | Notes |
+|---------|---------------|-------|
+| SepReformer | `overlap_separation.backend=sepreformer`, `overlap_separation.model_name=<model_dir>` | `model_name` is the directory under `SepReFormer/models`. The corresponding checkpoint must exist under that model's `log/pretrain_weights`, `log/pretrained_weights`, `log/scratch_weights`, or `log/scratch_weight`. |
+
+Model directories present in this checkout:
+
+| Size | `overlap_separation.model_name` | Training set |
+|------|----------------------------------|--------------|
+| Base | `SepReformer_Base_WSJ0` | WSJ0 |
+| Large | `SepReformer_Large_DM_WSJ0` | WSJ0 |
+| Large | `SepReformer_Large_DM_WHAM` | WHAM |
+| Large | `SepReformer_Large_DM_WHAMR` | WHAMR |
+
+The three Large variants are selected only by changing `overlap_separation.model_name`; no code change is needed as long as the matching config and checkpoint exist under that model directory.
+
+Example SepReformer config:
+
+```json
+{
+  "overlap_separation": {
+    "enabled": true,
+    "backend": "sepreformer",
+    "sepreformer_path": "SepReFormer",
+    "model_name": "SepReformer_Large_DM_WSJ0",
+    "device": "cpu",
+    "overlap_threshold_seconds": 0.2
+  }
+}
+```
+
+### ASR And Labeling
+
+| Stage | Config values | Notes |
+|-------|---------------|-------|
+| Local ASR | `asr.enabled=true`, `asr.asr_backend=local`, `asr.backend=phowhisper_local`, `asr.model=vinai/PhoWhisper-large` | Loads PhoWhisper locally through Hugging Face Transformers. |
+| Kaggle ASR | `asr.enabled=true`, `asr.asr_backend=kaggle` | Runs local pre-ASR phases, uploads an ASR bundle, runs PhoWhisper on Kaggle GPU, downloads `transcript.json`, then continues local post-ASR phases. |
+| Skip ASR | `asr.enabled=false` | Skips ASR even if `asr.asr_backend` is set to `kaggle`. |
+| Qwen state labeling | `state_labeling.enabled=true`, `state_labeling.model=qwen3.8-max` | Uses DashScope/OpenAI-compatible chat completions. Set `DASHSCOPE_API_KEY` before non-dry runs. |
 
 ## Run PhoWhisper ASR Only
 
 ```bash
 PYTHONPATH=. /opt/anaconda3/envs/sommelier/bin/python -m pipeline.asr /path/to/audio.wav
 ```
+
+## Run Full Pipeline On Kaggle GPU
+
+Use this when local PhoWhisper, PixIT, Demucs, or SepReFormer are too slow and you want `bash run.sh` to upload one input audio, run the heavy pipeline stages on Kaggle GPU, then download `outputs/<audio_id>/` back to local.
+
+Set this in `config.json`:
+
+```json
+{
+  "entrypoint": {
+    "input_path": "inputs/haveasip_khanhvi_5m_2.wav",
+    "output_path": "outputs"
+  },
+  "runtime": {
+    "backend": "kaggle",
+    "dry_run": false
+  },
+  "asr": {
+    "enabled": true,
+    "asr_backend": "local"
+  },
+  "kaggle": {
+    "dataset_slug": "ngocbaotrinhtuan/vilier-pipeline-bundle",
+    "kernel_slug": "ngocbaotrinhtuan/vilier-gpu-pipeline",
+    "accelerator": "NvidiaTeslaT4"
+  }
+}
+```
+
+Then run only:
+
+```bash
+bash run.sh
+```
+
+`runtime.backend=kaggle` currently expects exactly one input audio file. The local script creates a Kaggle Dataset with the raw audio, remote config, and the minimal Vilier source bundle, pushes a private Kaggle kernel, waits for completion, downloads `<audio_id>_pipeline_result.zip`, and merges it into `outputs/<audio_id>/`.
+
+If a stage is disabled in config, it stays disabled on Kaggle. For example, `asr.enabled=false` skips ASR even when the runtime backend is `kaggle`. `state_labeling` is always kept local and is disabled inside the Kaggle bundle because it uses a separate text API key flow.
+
+For PixIT on Kaggle, add `HUGGINGFACE_TOKEN` as a Kaggle Secret. Defaults use `kaggle.accelerator=NvidiaTeslaT4` for Kaggle's T4 GPU accelerator instead of P100.
+
+## Run ASR Only On Kaggle GPU
+
+Use `notebooks/kaggle_phowhisper_asr.ipynb` when local VAD/diarization outputs already exist and only PhoWhisper ASR should run on Kaggle GPU. Add a Kaggle Dataset containing a zip of `outputs/<audio_id>/asr_audio`, `vad.json`, and `manifest.timeline.json`; the notebook runs `tools/run_asr_bundle.py` on the remote Kaggle kernel and produces `<audio_id>_asr_result.zip` with `transcript.json` for local download. Bundles from older manifests without `asr_segments` can still fall back to `vad_audio`.
+
+Create the Kaggle input bundle locally with:
+
+```bash
+./bundle.sh <audio_id>
+```
+
+To run the local pre-ASR phases and offload only ASR to Kaggle:
+
+Set this in `config.json`:
+
+```json
+{
+  "runtime": {
+    "backend": "local"
+  },
+  "asr": {
+    "enabled": true,
+    "asr_backend": "kaggle"
+  }
+}
+```
+
+Then run:
+
+```bash
+bash run.sh
+```
+
+`run.sh` reads `entrypoint.input_path`, `entrypoint.output_path`, `runtime.dry_run`, `asr.enabled`, `asr.asr_backend`, and `asr.kaggle` from `config.json`. If `asr.enabled` is `false`, ASR is skipped even when `asr.asr_backend` is `kaggle`.
+
+Defaults use `asr.kaggle.dataset_slug=ngocbaotrinhtuan/vilier-asr-bundle`, `asr.kaggle.kernel_slug=ngocbaotrinhtuan/vilier-phowhisper-asr`, and `asr.kaggle.accelerator=NvidiaTeslaT4` for Kaggle's T4 GPU accelerator instead of P100. `run.sh` will run local pre-ASR phases, create and upload the audio bundle plus minimal ASR source code, wait until Kaggle reports the dataset files are visible, run Kaggle ASR, download `transcript.json`, then continue local state labeling and manifest finalization. Environment variables such as `ASR_BACKEND`, `INPUT_PATH`, `OUTPUT_PATH`, and `KAGGLE_ACCELERATOR` can still override config values for one-off runs.
 
 ## Log Format
 
@@ -80,7 +251,7 @@ Each run prints one tree block for the batch and one tree block per audio file:
     ├── input_path=inputs/vi_one.wav
     ├── output_path=outputs
     ├── log_dir=logs/2026-08-24
-    ├── state_dir=state
+    ├── state_dir=outputs/vi_one/state
     ├── dry_run=1
     └── files=1
 
@@ -119,24 +290,30 @@ outputs/<audio_id>/
   labels/SPEAKER_00.txt
   vad_audio/audio_1.wav
   vad_audio/audio_2.wav
+  music_cleaned.wav
+  asr_audio/SPEAKER_00/audio_00001.wav
+  asr_audio/SPEAKER_01/audio_00001.wav
   diarization_chunks/chunk_1.wav
   diarization_chunks/chunk_2.wav
   tracks/SPEAKER_00.wav
-state/
-  complete/complete_01.wav
-  complete/complete_01.json
-  incomplete/incomplete_01.wav
-  incomplete/incomplete_01.json
-  index.json
+  state/
+    complete/complete_01.wav
+    complete/complete_01.json
+    incomplete/incomplete_01.wav
+    incomplete/incomplete_01.json
+    index.json
 ```
 
-`manifest.timeline.json` includes `vad_segments`, VAD utterance audio paths, diarization chunk paths with source-time mapping, speaker segments, track paths, and Audacity label file paths.
-It also includes `transcript`, with one speaker-tagged transcript record per VAD utterance when `asr.enabled` is `true`, plus state label fields when `state_labeling.enabled` is `true`.
-`state_labeling` in the manifest summarizes the configured labels, Qwen model, counts, and `state/index.json`.
+`manifest.timeline.json` includes `vad_segments`, VAD utterance audio paths, `music_separation`, `asr_segments`, diarization chunk paths with source-time mapping, speaker segments, track paths, and Audacity label file paths.
+It also includes `transcript`, with one speaker-tagged transcript record per speaker-channel ASR segment when `asr.enabled` is `true`, plus state label fields when `state_labeling.enabled` is `true`.
+`state_labeling` in the manifest summarizes the configured labels, Qwen model, counts, and `outputs/<audio_id>/state/index.json`.
 `transcript.json` contains the same transcript records as a standalone inspectable file.
 `vad.txt` is a tab-separated view of the same VAD intervals: `start_time<TAB>end_time<TAB>label`.
-`vad_audio/audio_*.wav` contains one WAV file per VAD utterance, numbered from `audio_1.wav` in VAD order.
-`diarization_chunks/chunk_*.wav` contains concatenated VAD utterances for Sortformer. Diarization timestamps from these speech-only chunks are mapped back to the original audio timeline before labels and speaker tracks are written.
+`vad_audio/audio_*.wav` contains one WAV file per source-audio VAD utterance, numbered from `audio_1.wav` in VAD order. These files are for VAD review and diarization support, not the default ASR input.
+`music_cleaned.wav` is written only when `music_separation.enabled` is active. SepReformer, speaker tracks, and downstream ASR use this cleaned waveform.
+`asr_audio/SPEAKER_*/*.wav` contains speech segments detected on each exported speaker track. These files are the default ASR and Qwen labeling input.
+`diarization_chunks/chunk_*.wav` contains concatenated VAD utterances for Sortformer compatibility. PixIT diarization runs on `audio.standardized.wav` directly.
+When `music_separation.enabled` is `true`, Demucs runs before SepReformer so overlap separation receives the vocal-cleaned waveform, following the Sommelier ordering.
 When `overlap_separation.enabled` is `true`, overlapping speaker regions are separated before speaker tracks are exported. This follows the Sommelier SepReformer flow: detect overlapping diarization pairs, separate only the mixed overlap region, match separated source volume to each speaker's non-overlap RMS, then reconstruct enhanced per-speaker audio for track export.
 
 ## Audacity Import
@@ -157,6 +334,6 @@ All label files use Audacity's tab-separated format: `start_time<TAB>end_time<TA
 Segment WAV export is disabled by default for faster Audacity-oriented generation. Set `export.write_segment_wavs` to `true` in `config.json` when you need individual files under `segments/SPEAKER_*`.
 Matplotlib visualization export is also disabled by default. Set `export.write_visualizations` to `true` when you need PNG files under `visualization/`.
 
-Overlap separation is disabled by default because SepReformer weights are not bundled. Set `overlap_separation.enabled` to `true` and point `overlap_separation.sepreformer_path` to a local SepReformer checkout when those weights are available.
+Set `overlap_separation.enabled` to `false` to skip SepReFormer. When it is enabled, point `overlap_separation.sepreformer_path` to the local `SepReFormer` checkout and choose a `model_name` whose checkpoint exists.
 
 `tracks/SPEAKER_*.wav` are full-duration files. Playing them in parallel reconstructs the speaker timing from the original conversation.

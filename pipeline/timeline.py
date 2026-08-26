@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
@@ -42,6 +43,7 @@ def export_segments_and_tracks(
     output_dir: Path,
     write_segment_wavs: bool = True,
     segment_audio_overrides: dict[str, np.ndarray] | None = None,
+    progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> list[SpeakerTrack]:
     speakers = sorted({segment.speaker for segment in segments})
     tracks = {speaker: np.zeros_like(waveform, dtype=np.float32) for speaker in speakers}
@@ -53,7 +55,10 @@ def export_segments_and_tracks(
             segment_dir.mkdir(parents=True, exist_ok=True)
             segment_dirs[speaker] = segment_dir
 
-    for segment in segments:
+    total = len(segments)
+    for segment_idx, segment in enumerate(segments, start=1):
+        if progress_callback is not None:
+            progress_callback(segment_idx, total, f"{segment.speaker}:{segment.id}")
         start_idx = max(0, int(round(segment.start * sample_rate)))
         end_idx = min(len(waveform), int(round(segment.end * sample_rate)))
         audio = segment_audio_overrides.get(segment.id)
@@ -132,7 +137,9 @@ def write_manifest(
     vad_segments: list[dict],
     audacity_labels: dict | None = None,
     vad_audio: list[Path] | None = None,
+    asr_segments: list[dict] | None = None,
     diarization_chunks: list[dict] | None = None,
+    music_separation: dict | None = None,
     overlap_separation: dict | None = None,
     transcript: list[dict] | None = None,
     state_labeling: dict | None = None,
@@ -147,7 +154,9 @@ def write_manifest(
         "segments": [segment.to_manifest() for segment in segments],
         "vad_segments": [_vad_to_manifest(segment) for segment in vad_segments],
         "vad_audio": [str(path) for path in vad_audio or []],
+        "asr_segments": [_asr_segment_to_manifest(segment) for segment in asr_segments or []],
         "diarization_chunks": [_chunk_to_manifest(chunk) for chunk in diarization_chunks or []],
+        "music_separation": music_separation or {"enabled": False, "applied": False},
         "overlap_separation": overlap_separation or {"enabled": False, "overlap_regions": []},
         "audacity_labels": _labels_to_manifest(audacity_labels or {}),
         "transcript": transcript or [],
@@ -186,3 +195,16 @@ def _vad_to_manifest(segment: dict) -> dict:
         "duration": round(end - start, 6),
     }
     return payload
+
+
+def _asr_segment_to_manifest(segment: dict) -> dict:
+    start = round(float(segment["start"]), 3)
+    end = round(float(segment["end"]), 3)
+    return {
+        "id": str(segment.get("id", "")),
+        "speaker": str(segment.get("speaker", "")),
+        "start": start,
+        "end": end,
+        "duration": round(end - start, 6),
+        "audio": str(segment.get("audio", "")),
+    }

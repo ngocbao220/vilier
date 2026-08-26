@@ -1,0 +1,117 @@
+{
+  "audio_id": "short_youtube",
+  "source_audio": "inputs/short_youtube.wav",
+  "standardized_audio": "audio.standardized.wav",
+  "duration_seconds": 55.588625,
+  "sample_rate": 16000,
+  "speakers": [
+    {
+      "id": "SPEAKER_00",
+      "track_wav": "tracks/SPEAKER_00.wav"
+    }
+  ],
+  "segments": [
+    {
+      "id": "chunk_001_00000_SPEAKER_00",
+      "speaker": "SPEAKER_00",
+      "start": 0.098,
+      "end": 34.558,
+      "segment_wav": "",
+      "is_overlap": false,
+      "overlap_group_id": null,
+      "duration": 34.46
+    },
+    {
+      "id": "chunk_001_00001_SPEAKER_00",
+      "speaker": "SPEAKER_00",
+      "start": 34.85,
+      "end": 49.83,
+      "segment_wav": "",
+      "is_overlap": false,
+      "overlap_group_id": null,
+      "duration": 14.98
+    }
+  ],
+  "vad_segments": [
+    {
+      "id": "vad_00000",
+      "start": 0.098,
+      "end": 34.558,
+      "duration": 34.46
+    },
+    {
+      "id": "vad_00001",
+      "start": 34.85,
+      "end": 50.014,
+      "duration": 15.164
+    }
+  ],
+  "vad_audio": [
+    "vad_audio/audio_1.wav",
+    "vad_audio/audio_2.wav"
+  ],
+  "asr_segments": [
+    {
+      "id": "asrseg_00000",
+      "speaker": "SPEAKER_00",
+      "start": 0.098,
+      "end": 34.558,
+      "duration": 34.46,
+      "audio": "asr_audio/SPEAKER_00/audio_00001.wav"
+    },
+    {
+      "id": "asrseg_00001",
+      "speaker": "SPEAKER_00",
+      "start": 34.85,
+      "end": 49.886,
+      "duration": 15.036,
+      "audio": "asr_audio/SPEAKER_00/audio_00002.wav"
+    }
+  ],
+  "diarization_chunks": [
+    {
+      "id": "chunk_1",
+      "audio": "diarization_chunks/chunk_1.wav",
+      "duration": 49.624,
+      "mapping": [
+        {
+          "vad_id": "vad_00000",
+          "chunk_start": 0.0,
+          "chunk_end": 34.46,
+          "source_start": 0.098,
+          "source_end": 34.558
+        },
+        {
+          "vad_id": "vad_00001",
+          "chunk_start": 34.46,
+          "chunk_end": 49.624,
+          "source_start": 34.85,
+          "source_end": 50.014
+        }
+      ]
+    }
+  ],
+  "music_separation": {
+    "enabled": true,
+    "applied": true,
+    "backend": "demucs",
+    "model": "htdemucs",
+    "audio": "music_cleaned.wav"
+  },
+  "overlap_separation": {
+    "enabled": false,
+    "overlap_regions": [],
+    "enhanced_segment_count": 0
+  },
+  "audacity_labels": {
+    "vad": "labels/vad.txt",
+    "speakers": "labels/speakers.txt",
+    "speaker_labels": {
+      "SPEAKER_00": "labels/SPEAKER_00.txt"
+    }
+  },
+  "transcript": [],
+  "state_labeling": {
+    "enabled": false
+  }
+}
