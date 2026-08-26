@@ -10,6 +10,7 @@ pyyaml
 
 torch
 torchaudio
+silero-vad
 transformers
 accelerate
 sentencepiece

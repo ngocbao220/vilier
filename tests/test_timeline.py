@@ -1,4 +1,5 @@
 import json
+import builtins
 import sys
 import tempfile
 import unittest
@@ -24,7 +25,7 @@ from pipeline.music import _suppress_accompaniment, apply_music_separation, load
 from pipeline.overlap_separation import _find_checkpoint_dir, _import_sepreformer_model_class, _resolve_sepreformer_path, apply_overlap_separation
 from pipeline.schema import SpeakerSegment
 from pipeline.timeline import annotate_overlaps, export_audacity_labels, export_segments_and_tracks, write_manifest
-from pipeline.vad import SileroVadRunner, cleanup_intervals, export_vad_audio, write_vad_txt
+from pipeline.vad import SileroVadRunner, _TorchHubSileroVad, cleanup_intervals, export_vad_audio, write_vad_txt
 from pipeline.asr import (
     DryRunAsrRunner,
     PhoWhisperLocalRunner,
@@ -102,13 +103,11 @@ class TimelineTest(unittest.TestCase):
         runner = SileroVadRunner.__new__(SileroVadRunner)
         runner.config = {"threshold": 0.35, "min_duration_seconds": 0.01, "merge_gap_seconds": 0.2}
         runner.sample_rate = 16000
-        runner.model = FakeModel()
+        runner.model = _TorchHubSileroVad(FakeModel().vad_model, FakeModel().get_speech_timestamps, sampling_rate=16000)
 
         with mock.patch.dict(
             sys.modules,
             {
-                "models": SimpleNamespace(silero_vad=SimpleNamespace(SAMPLING_RATE=16000)),
-                "models.silero_vad": SimpleNamespace(SAMPLING_RATE=16000),
                 "librosa": SimpleNamespace(resample=lambda audio, orig_sr, target_sr: audio),
             },
         ):
@@ -116,6 +115,48 @@ class TimelineTest(unittest.TestCase):
 
         self.assertEqual(calls[0]["threshold"], 0.35)
         self.assertEqual(segments, [{"id": "vad_00000", "start": 0.0, "end": 0.1}])
+
+    def test_silero_load_model_uses_packaged_silero_vad(self):
+        fake_package = SimpleNamespace(
+            load_silero_vad=lambda: object(),
+            get_speech_timestamps=lambda audio, model, **kwargs: [],
+        )
+        runner = SileroVadRunner.__new__(SileroVadRunner)
+        runner.config = {"model": "silero_vad"}
+        runner.sample_rate = 16000
+        runner.dry_run = False
+
+        with mock.patch.dict(sys.modules, {"silero_vad": fake_package}):
+            model = runner._load_model()
+
+        self.assertEqual(model.sampling_rate, 16000)
+
+    def test_silero_load_model_falls_back_to_torchhub_without_models_or_package(self):
+        class FakeHub:
+            def load(self, **kwargs):
+                self.kwargs = kwargs
+                return object(), (lambda audio, model, **call_kwargs: [],)
+
+        fake_hub = FakeHub()
+        fake_torch = SimpleNamespace(hub=fake_hub)
+        runner = SileroVadRunner.__new__(SileroVadRunner)
+        runner.config = {"model": "silero_vad"}
+        runner.sample_rate = 16000
+        runner.dry_run = False
+
+        original_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name in {"models", "silero_vad"}:
+                raise ModuleNotFoundError(f"No module named '{name}'", name=name)
+            return original_import(name, *args, **kwargs)
+
+        with mock.patch.dict(sys.modules, {"torch": fake_torch}), mock.patch("builtins.__import__", side_effect=fake_import):
+            model = runner._load_model()
+
+        self.assertEqual(model.sampling_rate, 16000)
+        self.assertEqual(fake_hub.kwargs["repo_or_dir"], "snakers4/silero-vad")
+        self.assertEqual(fake_hub.kwargs["model"], "silero_vad")
 
     def test_overlap_grouping(self):
         segments = [

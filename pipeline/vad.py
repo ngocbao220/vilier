@@ -22,6 +22,12 @@ class SileroVadRunner:
         return self._silero_detect(waveform)
 
     def _load_model(self):
+        try:
+            return _load_packaged_silero_vad()
+        except ModuleNotFoundError as exc:
+            if exc.name != "silero_vad":
+                raise
+
         import sys
 
         candidates = [
@@ -33,19 +39,27 @@ class SileroVadRunner:
                 sys.path.insert(0, str(candidate))
                 break
 
-        from models import silero_vad
-        import torch
+        try:
+            from models import silero_vad
+            import torch
 
-        return silero_vad.SileroVAD(
-            model=self.config.get("model", "silero_vad"),
-            device=torch.device("cpu"),
-        )
+            return _LocalSileroVadAdapter(
+                silero_vad.SileroVAD(
+                    model=self.config.get("model", "silero_vad"),
+                    device=torch.device("cpu"),
+                ),
+                sampling_rate=silero_vad.SAMPLING_RATE,
+            )
+        except ModuleNotFoundError as exc:
+            if exc.name != "models":
+                raise
+
+        return _load_torchhub_silero_vad()
 
     def _silero_detect(self, waveform: np.ndarray) -> list[dict]:
-        from models import silero_vad
         import librosa
 
-        target_sr = silero_vad.SAMPLING_RATE
+        target_sr = int(getattr(self.model, "sampling_rate", 16000))
         vad_audio = waveform
         if self.sample_rate != target_sr:
             vad_audio = librosa.resample(waveform, orig_sr=self.sample_rate, target_sr=target_sr)
@@ -87,6 +101,45 @@ class SileroVadRunner:
             min_duration=float(self.config.get("min_duration_seconds", 0.25)),
             merge_gap=float(self.config.get("merge_gap_seconds", 0.2)),
         )
+
+
+class _LocalSileroVadAdapter:
+    def __init__(self, model, sampling_rate: int):
+        self.model = model
+        self.sampling_rate = sampling_rate
+        self.vad_model = model.vad_model
+
+    def get_speech_timestamps(self, audio, model, **kwargs):
+        return self.model.get_speech_timestamps(audio, model, **kwargs)
+
+
+class _TorchHubSileroVad:
+    def __init__(self, vad_model, get_speech_timestamps, sampling_rate: int = 16000):
+        self.vad_model = vad_model
+        self._get_speech_timestamps = get_speech_timestamps
+        self.sampling_rate = sampling_rate
+
+    def get_speech_timestamps(self, audio, model, **kwargs):
+        return self._get_speech_timestamps(audio, model, **kwargs)
+
+
+def _load_torchhub_silero_vad():
+    import torch
+
+    vad_model, utils = torch.hub.load(
+        repo_or_dir="snakers4/silero-vad",
+        model="silero_vad",
+        trust_repo=True,
+    )
+    get_speech_timestamps = utils[0]
+    return _TorchHubSileroVad(vad_model=vad_model, get_speech_timestamps=get_speech_timestamps, sampling_rate=16000)
+
+
+def _load_packaged_silero_vad():
+    from silero_vad import get_speech_timestamps, load_silero_vad
+
+    vad_model = load_silero_vad()
+    return _TorchHubSileroVad(vad_model=vad_model, get_speech_timestamps=get_speech_timestamps, sampling_rate=16000)
 
 
 def cleanup_intervals(intervals: list[dict], min_duration: float, merge_gap: float) -> list[dict]:
