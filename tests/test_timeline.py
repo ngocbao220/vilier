@@ -14,6 +14,7 @@ import soundfile as sf
 from pipeline.diarization import (
     DiariZenDiarizer,
     _allow_torch_checkpoint_globals,
+    _import_diarizen_pipeline,
     _hf_hub_download_use_auth_token_compat,
     _load_pyannote_pipeline,
     _patch_torchaudio_audio_metadata,
@@ -641,6 +642,31 @@ class TimelineTest(unittest.TestCase):
         self.assertEqual(diarizer.pipeline.audio_path, "meeting.wav")
         self.assertEqual(diarizer.pipeline.sess_name, "meeting")
         self.assertEqual([(segment.start, segment.end, segment.speaker) for segment in segments], [(0.0, 1.0, "SPEAKER_00"), (1.2, 2.0, "SPEAKER_01")])
+
+    def test_import_diarizen_pipeline_retries_after_pyannote_audio_key_error(self):
+        class Pipeline:
+            pass
+
+        inference = types.ModuleType("diarizen.pipelines.inference")
+        inference.DiariZenPipeline = Pipeline
+        calls = []
+        original_import = builtins.__import__
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "diarizen.pipelines.inference":
+                calls.append(name)
+                if len(calls) == 1:
+                    sys.modules["pyannote.audio"] = types.ModuleType("pyannote.audio")
+                    raise KeyError("pyannote.audio")
+                return inference
+            return original_import(name, globals, locals, fromlist, level)
+
+        with mock.patch.object(builtins, "__import__", side_effect=fake_import):
+            result = _import_diarizen_pipeline()
+
+        self.assertIs(result, Pipeline)
+        self.assertEqual(calls, ["diarizen.pipelines.inference", "diarizen.pipelines.inference"])
+        self.assertNotIn("pyannote.audio", sys.modules)
 
     def test_allow_torch_checkpoint_globals_registers_required_classes(self):
         class TorchVersion:

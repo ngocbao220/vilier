@@ -306,15 +306,7 @@ class DiariZenDiarizer:
         except Exception:
             pass
 
-        try:
-            from diarizen.pipelines.inference import DiariZenPipeline
-        except ModuleNotFoundError as exc:
-            if exc.name and not exc.name.startswith("diarizen"):
-                raise
-            raise ModuleNotFoundError(
-                "DiariZen is not installed in the active environment. Install the upstream "
-                "BUTSpeechFIT/DiariZen package before using diarization.backend=diarizen."
-            ) from exc
+        DiariZenPipeline = _import_diarizen_pipeline()
 
         kwargs = {
             "cache_dir": self.cache_dir or None,
@@ -324,6 +316,38 @@ class DiariZenDiarizer:
 
     def _dry_run_segments(self, vad_segments: list[dict]) -> list[SpeakerSegment]:
         return SortformerDiarizer(self.config, dry_run=True)._dry_run_segments(vad_segments)
+
+
+def _import_diarizen_pipeline():
+    try:
+        from diarizen.pipelines.inference import DiariZenPipeline
+    except ModuleNotFoundError as exc:
+        if exc.name and not exc.name.startswith("diarizen"):
+            raise
+        raise ModuleNotFoundError(
+            "DiariZen is not installed in the active environment. Install the upstream "
+            "BUTSpeechFIT/DiariZen package before using diarization.backend=diarizen."
+        ) from exc
+    except KeyError as exc:
+        if exc.args != ("pyannote.audio",):
+            raise
+        _clear_imported_modules(("pyannote", "diarizen"))
+        try:
+            from diarizen.pipelines.inference import DiariZenPipeline
+        except KeyError as retry_exc:
+            if retry_exc.args != ("pyannote.audio",):
+                raise
+            raise RuntimeError(
+                "DiariZen failed while importing pyannote.audio. Reinstall compatible DiariZen and "
+                "pyannote-audio packages in the active environment, then rerun diarization.backend=diarizen."
+            ) from retry_exc
+    return DiariZenPipeline
+
+
+def _clear_imported_modules(prefixes: tuple[str, ...]) -> None:
+    for module_name in list(sys.modules):
+        if any(module_name == prefix or module_name.startswith(f"{prefix}.") for prefix in prefixes):
+            sys.modules.pop(module_name, None)
 
 
 def _allow_torch_checkpoint_globals(torch_module, extra_globals: list | None = None) -> None:
