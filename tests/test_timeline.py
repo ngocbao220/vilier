@@ -12,12 +12,14 @@ import numpy as np
 import soundfile as sf
 
 from pipeline.diarization import (
+    DiariZenDiarizer,
     _allow_torch_checkpoint_globals,
     _hf_hub_download_use_auth_token_compat,
     _load_pyannote_pipeline,
     _patch_torchaudio_audio_metadata,
     _speechbrain_device,
     _speechbrain_use_auth_token_compat,
+    load_diarizer,
     PyannotePixitDiarizer,
     build_diarization_chunks,
     pyannote_annotation_to_segments,
@@ -566,6 +568,77 @@ class TimelineTest(unittest.TestCase):
         segments = pyannote_annotation_to_segments(annotation, min_duration=0.25)
 
         self.assertEqual([(segment.start, segment.end, segment.speaker) for segment in segments], [(0.2, 0.8, "SPEAKER_00"), (1.0, 2.0, "SPEAKER_01")])
+
+    def test_load_diarizer_accepts_diarizen_backend_in_dry_run(self):
+        diarizer = load_diarizer({"backend": "diarizen"}, dry_run=True)
+
+        self.assertIsInstance(diarizer, DiariZenDiarizer)
+        self.assertEqual(diarizer.model_name, "BUT-FIT/diarizen-wavlm-large-s80-md")
+
+    def test_diarizen_diarizer_loads_pipeline_and_normalizes_annotation(self):
+        class Turn:
+            def __init__(self, start, end):
+                self.start = start
+                self.end = end
+
+        class Annotation:
+            uri = None
+
+            def itertracks(self, yield_label=False):
+                self.assertTrue(yield_label)
+                yield Turn(0.0, 1.0), None, "speaker_b"
+                yield Turn(1.2, 2.0), None, "speaker_a"
+
+        class Pipeline:
+            calls = []
+
+            @classmethod
+            def from_pretrained(cls, *args, **kwargs):
+                cls.calls.append((args, kwargs))
+                return cls()
+
+            def __call__(self, audio_path, sess_name=None):
+                self.audio_path = audio_path
+                self.sess_name = sess_name
+                annotation = Annotation()
+                annotation.assertTrue = self.assertTrue
+                return annotation
+
+        inference = types.ModuleType("diarizen.pipelines.inference")
+        inference.DiariZenPipeline = Pipeline
+        pipelines = types.ModuleType("diarizen.pipelines")
+        diarizen = types.ModuleType("diarizen")
+
+        with mock.patch.dict(
+            sys.modules,
+            {
+                "diarizen": diarizen,
+                "diarizen.pipelines": pipelines,
+                "diarizen.pipelines.inference": inference,
+            },
+        ):
+            diarizer = DiariZenDiarizer(
+                {
+                    "model": "BUT-FIT/test-model",
+                    "cache_dir": "/tmp/diarizen-cache",
+                    "rttm_out_dir": "/tmp/rttm",
+                    "min_duration_seconds": 0.25,
+                }
+            )
+            segments = diarizer.diarize(Path("meeting.wav"), [])
+
+        self.assertEqual(
+            Pipeline.calls,
+            [
+                (
+                    ("BUT-FIT/test-model",),
+                    {"cache_dir": "/tmp/diarizen-cache", "rttm_out_dir": "/tmp/rttm"},
+                )
+            ],
+        )
+        self.assertEqual(diarizer.pipeline.audio_path, "meeting.wav")
+        self.assertEqual(diarizer.pipeline.sess_name, "meeting")
+        self.assertEqual([(segment.start, segment.end, segment.speaker) for segment in segments], [(0.0, 1.0, "SPEAKER_00"), (1.2, 2.0, "SPEAKER_01")])
 
     def test_allow_torch_checkpoint_globals_registers_required_classes(self):
         class TorchVersion:

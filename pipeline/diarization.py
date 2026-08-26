@@ -49,12 +49,107 @@ class SortformerDiarizer:
         segments = []
         min_duration = float(self.config.get("min_duration_seconds", 0.25))
         total = len(chunks)
+        chunk_results = []
+
         for chunk_idx, chunk in enumerate(chunks, start=1):
             if progress_callback is not None:
-                progress_callback(chunk_idx, total, str(chunk.get("id", f"chunk_{chunk_idx}")))
+                progress_callback(chunk_idx, total, f"diarize {chunk.get('id', f'chunk_{chunk_idx}')}")
             chunk_segments = self._diarize_audio(chunk["path"])
+            chunk_results.append((chunk, chunk_segments))
+
+        if total > 1:
+            if progress_callback is not None:
+                progress_callback(total, total, "clustering global speakers")
+            global_mapping = self._cluster_local_speakers(chunk_results)
+        else:
+            global_mapping = None
+
+        for chunk_idx, (chunk, chunk_segments) in enumerate(chunk_results, start=1):
+            if global_mapping:
+                for seg in chunk_segments:
+                    seg.speaker = global_mapping.get((chunk_idx, seg.speaker), seg.speaker)
             segments.extend(remap_chunk_segments_to_original(chunk_segments, chunk["mapping"], chunk_idx, min_duration))
         return segments
+
+    def _cluster_local_speakers(self, chunk_results: list[tuple[dict, list[SpeakerSegment]]]) -> dict:
+        import torch
+        import torchaudio
+        from speechbrain.inference.speaker import EncoderClassifier
+        from scipy.cluster.hierarchy import linkage, fcluster
+        from scipy.spatial.distance import pdist
+        import numpy as np
+
+        device = self.config.get("device", "cuda") if torch.cuda.is_available() else "cpu"
+        device = resolve_torch_device(torch, device) or "cpu"
+
+        try:
+            with _speechbrain_use_auth_token_compat():
+                classifier = EncoderClassifier.from_hparams(
+                    source="speechbrain/spkrec-ecapa-voxceleb",
+                    run_opts={"device": device},
+                    savedir="pretrained_models/spkrec-ecapa-voxceleb"
+                )
+        except Exception as e:
+            import logging
+            logging.warning(f"Could not load ECAPA-TDNN for global clustering: {e}")
+            return {}
+
+        embeddings_list = []
+        labels = []
+
+        for chunk_idx, (chunk, chunk_segments) in enumerate(chunk_results, start=1):
+            try:
+                signal, fs = torchaudio.load(chunk["path"])
+                if fs != 16000:
+                    signal = torchaudio.functional.resample(signal, fs, 16000)
+            except Exception:
+                continue
+            
+            speaker_to_segments = {}
+            for seg in chunk_segments:
+                speaker_to_segments.setdefault(seg.speaker, []).append(seg)
+                
+            for speaker, segs in speaker_to_segments.items():
+                speaker_wavs = []
+                for seg in segs:
+                    start_sample = int(seg.start * 16000)
+                    end_sample = int(seg.end * 16000)
+                    if end_sample > start_sample:
+                        speaker_wavs.append(signal[:, start_sample:end_sample])
+                
+                if not speaker_wavs:
+                    continue
+                speaker_signal = torch.cat(speaker_wavs, dim=1)
+                
+                with torch.no_grad():
+                    embeddings = classifier.encode_batch(speaker_signal.to(device))
+                    emb = embeddings.squeeze().cpu().numpy()
+                
+                if emb.ndim == 1:
+                    embeddings_list.append(emb)
+                    labels.append((chunk_idx, speaker))
+                elif emb.ndim == 0:
+                    embeddings_list.append(np.expand_dims(emb, 0))
+                    labels.append((chunk_idx, speaker))
+
+        if not embeddings_list:
+            return {}
+            
+        X = np.stack(embeddings_list)
+        if len(X) < 2:
+            return {}
+
+        distances = pdist(X, metric='cosine')
+        Z = linkage(distances, method='average')
+        
+        # 0.6 is a standard threshold for ECAPA-TDNN cosine distance
+        cluster_labels = fcluster(Z, t=0.6, criterion='distance')
+        
+        mapping = {}
+        for (chunk_idx, old_spk), cluster_id in zip(labels, cluster_labels):
+            mapping[(chunk_idx, old_spk)] = f"SPEAKER_{cluster_id - 1:02d}"
+            
+        return mapping
 
     def _diarize_audio(self, audio_path: Path) -> list[SpeakerSegment]:
         _configure_nemo_logging(self.nemo_log_level)
