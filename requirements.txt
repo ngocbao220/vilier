@@ -20,3 +20,4 @@ pyannote.audio[separation]==3.3.2
 speechbrain
 demucs
 nemo_toolkit[asr]
+git+https://github.com/BUTSpeechFIT/DiariZen.git
