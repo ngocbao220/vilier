@@ -289,6 +289,23 @@ class DiariZenDiarizer:
 
     def _load_pipeline(self):
         _patch_torchaudio_audio_metadata()
+        
+        # Patch SpeakerDiarization to ignore unexpected kwargs (like 'config') that were swallowed by **kwargs in Pyannote < 3.2
+        try:
+            import pyannote.audio.pipelines.speaker_diarization
+            original_init = pyannote.audio.pipelines.speaker_diarization.SpeakerDiarization.__init__
+            
+            def patched_init(self, *args, **kwargs):
+                import inspect
+                sig = inspect.signature(original_init)
+                valid_keys = set(sig.parameters.keys())
+                filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_keys or k == "self"}
+                original_init(self, *args, **filtered_kwargs)
+                
+            pyannote.audio.pipelines.speaker_diarization.SpeakerDiarization.__init__ = patched_init
+        except Exception:
+            pass
+
         try:
             from diarizen.pipelines.inference import DiariZenPipeline
         except ModuleNotFoundError as exc:
