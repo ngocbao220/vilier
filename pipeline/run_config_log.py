@@ -1,6 +1,10 @@
 import argparse
 import json
+import warnings
 from pathlib import Path
+
+from .devices import resolve_auto_device
+from .model_options import add_model_option_arguments, apply_model_overrides
 
 
 COMPONENTS = [
@@ -24,9 +28,10 @@ def format_component_usage_table(config: dict) -> str:
         enabled = bool(section.get("enabled", key in {"vad", "diarization"}))
         backend = _configured_backend(key, section)
         model = _configured_model(key, section)
-        rows.append([label, enabled_mark(enabled), backend, model])
+        device = resolve_device_label(section)
+        rows.append([label, enabled_mark(enabled), backend, model, device])
 
-    headers = ["Component", "Enabled", "Backend", "Model"]
+    headers = ["Component", "Enabled", "Backend", "Model", "Device"]
     widths = [
         max(len(str(row[idx])) for row in [headers] + rows)
         for idx in range(len(headers))
@@ -52,6 +57,24 @@ def _configured_model(key: str, section: dict) -> str:
     return str(section.get("model", ""))
 
 
+def resolve_device_label(section: dict, torch_module=None) -> str:
+    requested = str(section.get("device", "")).strip()
+    if not requested:
+        return ""
+    normalized = requested.lower()
+    if normalized not in {"auto", "gpu", "cuda"} and not normalized.startswith("cuda:"):
+        return requested
+    if torch_module is None:
+        try:
+            import torch as torch_module
+        except Exception:
+            return f"{requested} (torch unavailable)"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        resolved = resolve_auto_device(torch_module, normalized, warn_label="device")
+    return f"{resolved} ({requested})" if resolved != requested else resolved
+
+
 def _format_row(values: list[str], widths: list[int]) -> str:
     padded = [str(value).ljust(widths[idx]) for idx, value in enumerate(values)]
     return "| " + " | ".join(padded) + " |"
@@ -60,9 +83,10 @@ def _format_row(values: list[str], widths: list[int]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Print enabled/disabled pipeline component usage")
     parser.add_argument("--config", default="config.json")
-    args = parser.parse_args()
+    add_model_option_arguments(parser)
+    args, _ = parser.parse_known_args()
 
-    config = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    config = apply_model_overrides(json.loads(Path(args.config).read_text(encoding="utf-8")), args)
     print(format_component_usage_table(config))
     return 0
 

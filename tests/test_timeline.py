@@ -51,12 +51,12 @@ class TimelineTest(unittest.TestCase):
         self.assertEqual(normalize_pipeline_device("cpu"), "cpu")
         self.assertEqual(normalize_pipeline_device("gpu"), 0)
 
-    def test_resolve_torch_device_prefers_cuda_then_mps_for_auto(self):
+    def test_resolve_torch_device_prefers_cuda_then_cpu_for_auto(self):
         torch_module = SimpleNamespace(
             cuda=SimpleNamespace(is_available=lambda: False),
             backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
         )
-        self.assertEqual(resolve_torch_device(torch_module, "auto"), "mps")
+        self.assertEqual(resolve_torch_device(torch_module, "auto"), "cpu")
 
         torch_module.cuda.is_available = lambda: True
         self.assertEqual(resolve_torch_device(torch_module, "auto"), "cuda")

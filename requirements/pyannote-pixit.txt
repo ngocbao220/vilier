@@ -1,0 +1,7 @@
+-r vad.txt
+
+# Keep this profile isolated from pyannote-community and DiariZen.
+setuptools<81
+pyannote.audio[separation]==3.3.2
+huggingface_hub
+speechbrain

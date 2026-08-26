@@ -1,0 +1,6 @@
+-r vad.txt
+
+# Required by pyannote/speaker-diarization-community-1.
+pyannote.audio>=4.0
+huggingface_hub
+speechbrain

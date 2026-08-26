@@ -29,6 +29,6 @@ if [[ -n "${DRY_RUN}" ]]; then
   export DRY_RUN
 fi
 
-PYTHONPATH="${SCRIPT_DIR}" "${PYTHON_BIN}" -m pipeline.run_config_log --config "${CONFIG_PATH}"
+PYTHONPATH="${SCRIPT_DIR}" "${PYTHON_BIN}" -m pipeline.run_config_log --config "${CONFIG_PATH}" "$@"
 
-bash run_pipeline.sh
+bash run_pipeline.sh "$@"

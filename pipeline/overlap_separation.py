@@ -6,6 +6,7 @@ from typing import Callable
 
 import numpy as np
 
+from .devices import resolve_auto_device
 from .schema import SpeakerSegment
 
 
@@ -104,6 +105,8 @@ def load_overlap_separator(config: dict, dry_run: bool = False, warnings: list[s
 
 
 class NoOpSeparator:
+    resolved_device = "dry-run"
+
     def separate(self, audio_segment: np.ndarray, sample_rate: int):
         return audio_segment, audio_segment
 
@@ -113,12 +116,10 @@ class SepReformerSeparator:
         import torch
         import yaml
 
-        device = str(device).strip().lower()
-        if device == "gpu":
-            device = "cuda"
         self.sepreformer_path = sepreformer_path.expanduser().resolve()
         self.model_name = _validate_model_name(model_name)
-        self.device = torch.device(device)
+        self.resolved_device = resolve_auto_device(torch, device, warn_label="overlap_separation.device")
+        self.device = torch.device(self.resolved_device)
         if not self.sepreformer_path.exists():
             raise FileNotFoundError(f"SepReformer path not found: {self.sepreformer_path}")
 

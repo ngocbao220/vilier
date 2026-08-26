@@ -7,6 +7,7 @@ import numpy as np
 import soundfile as sf
 
 from .audio import slice_waveform, write_wav
+from .devices import resolve_auto_device
 from .schema import SpeakerSegment
 from .schema import relative_path
 
@@ -23,6 +24,7 @@ class DryRunAsrRunner:
     def __init__(self, model_name: str = "dry-run", language: str = "vi"):
         self.model_name = model_name
         self.language = language
+        self.resolved_device = "dry-run"
 
     def transcribe(self, audio_path: Path, index: int) -> str:
         return f"dry-run transcript {index}"
@@ -32,7 +34,8 @@ class PhoWhisperLocalRunner:
     def __init__(self, config: dict):
         self.model_name = str(config.get("model", "vinai/PhoWhisper-large"))
         self.language = str(config.get("language", "vi"))
-        self.device = normalize_pipeline_device(config.get("device", "cpu"))
+        self.device = config.get("device", "auto")
+        self.resolved_device = None
         self.chunk_length_seconds = config.get("chunk_length_seconds", 30.0)
         self._pipeline = None
 
@@ -60,13 +63,16 @@ class PhoWhisperLocalRunner:
             return self._pipeline
 
         from transformers import pipeline
+        import torch
 
         kwargs = {
             "task": "automatic-speech-recognition",
             "model": self.model_name,
         }
-        if self.device != "":
-            kwargs["device"] = -1 if self.device == "cpu" else self.device
+        resolved_device = normalize_pipeline_device(resolve_auto_device(torch, self.device, warn_label="asr.device"))
+        self.resolved_device = resolved_device
+        if resolved_device != "":
+            kwargs["device"] = -1 if resolved_device == "cpu" else resolved_device
         self._pipeline = pipeline(**kwargs)
         return self._pipeline
 

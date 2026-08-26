@@ -22,7 +22,7 @@
     "backend": "pyannote",
     "model": "pyannote/speaker-diarization-community-1",
     "token_env": "HUGGINGFACE_TOKEN",
-    "device": "cpu",
+    "device": "auto",
     "nemo_log_level": "ERROR",
     "min_duration_seconds": 0.25,
     "max_chunk_seconds": 180.0
@@ -32,7 +32,7 @@
     "backend": "phowhisper_local",
     "model": "vinai/PhoWhisper-large",
     "language": "vi",
-    "device": "cpu",
+    "device": "auto",
     "chunk_length_seconds": 30.0
   },
   "state_labeling": {
@@ -55,7 +55,7 @@
     "enabled": false,
     "backend": "demucs",
     "model": "htdemucs",
-    "device": "cpu",
+    "device": "auto",
     "shifts": 1,
     "split": true,
     "overlap": 0.25,
@@ -66,7 +66,7 @@
     "backend": "sepreformer",
     "sepreformer_path": "SepReformer",
     "model_name": "SepReformer_Large_DM_WHAMR",
-    "device": "cpu",
+    "device": "auto",
     "overlap_threshold_seconds": 0.2
   }
 }

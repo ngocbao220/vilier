@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from .audio import slice_waveform, write_wav
+from .devices import resolve_auto_device
 from .schema import SpeakerSegment, relative_path
 
 
@@ -33,6 +34,7 @@ class SortformerDiarizer:
         self.config = config
         self.dry_run = dry_run
         self.nemo_log_level = str(config.get("nemo_log_level", "WARNING")).upper()
+        self.resolved_device = "dry-run" if dry_run else ""
         self.model = None if dry_run else self._load_model()
 
     def diarize(self, audio_path: Path, vad_segments: list[dict]) -> list[SpeakerSegment]:
@@ -82,8 +84,7 @@ class SortformerDiarizer:
         from scipy.spatial.distance import pdist
         import numpy as np
 
-        device = self.config.get("device", "cuda") if torch.cuda.is_available() else "cpu"
-        device = resolve_torch_device(torch, device) or "cpu"
+        device = resolve_torch_device(torch, self.config.get("device", "auto")) or "cpu"
 
         try:
             with _speechbrain_use_auth_token_compat():
@@ -167,8 +168,12 @@ class SortformerDiarizer:
     def _load_model(self):
         _configure_nemo_logging(self.nemo_log_level)
         from nemo.collections.asr.models import SortformerEncLabelModel
+        import torch
 
         model = SortformerEncLabelModel.from_pretrained(self.config.get("model", "nvidia/diar_sortformer_4spk-v1"))
+        self.resolved_device = resolve_torch_device(torch, self.config.get("device", "auto"))
+        if self.resolved_device:
+            model = model.to(self.resolved_device)
         model.eval()
         return model
 
@@ -478,12 +483,7 @@ def resolve_torch_device(torch_module, requested: str) -> str:
     if requested == "":
         return ""
     if requested == "auto":
-        if getattr(getattr(torch_module, "cuda", None), "is_available", lambda: False)():
-            return "cuda"
-        mps_backend = getattr(getattr(torch_module, "backends", None), "mps", None)
-        if mps_backend is not None and getattr(mps_backend, "is_available", lambda: False)():
-            return "mps"
-        return "cpu"
+        return resolve_auto_device(torch_module, requested, warn_label="diarization.device")
     if requested == "mps":
         mps_backend = getattr(getattr(torch_module, "backends", None), "mps", None)
         if mps_backend is not None and getattr(mps_backend, "is_available", lambda: False)():

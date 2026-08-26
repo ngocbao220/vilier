@@ -1,0 +1,5 @@
+-r vad.txt
+
+nemo_toolkit[asr]
+speechbrain
+huggingface_hub

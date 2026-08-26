@@ -12,6 +12,7 @@ from .asr import export_speaker_asr_audio, load_asr_runner, transcribe_asr_segme
 from .audio import iter_audio_files, load_mono, write_wav
 from .diarization import DiariZenDiarizer, PyannotePixitDiarizer, build_diarization_chunks, load_diarizer
 from .labeling import label_transcripts, load_labeling_runner, resolve_state_dir, write_state_outputs
+from .model_options import add_model_option_arguments, apply_model_overrides
 from .music import apply_music_separation, load_music_separator
 from .overlap_separation import apply_overlap_separation, load_overlap_separator
 from .schema import relative_path
@@ -351,6 +352,9 @@ def process_one(
         music_attrs = [
             kv("enabled", music_summary["enabled"]),
             kv("applied", music_summary["applied"]),
+            kv("backend", music_summary["backend"]),
+            kv("model", music_summary["model"]),
+            kv("device", getattr(music_separator, "resolved_device", getattr(music_separator, "device", music_config.get("device", "")))),
         ]
         if music_summary["audio"]:
             music_attrs.append(kv("audio", music_summary["audio"]))
@@ -380,6 +384,9 @@ def process_one(
         )
         overlap_attrs = [
             kv("enabled", bool(overlap_config.get("enabled", False))),
+            kv("backend", overlap_config.get("backend", "")),
+            kv("model", overlap_config.get("model_name", overlap_config.get("model", ""))),
+            kv("device", getattr(separator, "resolved_device", getattr(separator, "device", overlap_config.get("device", "")))),
             kv("regions", len(overlap_result["overlap_regions"])),
             kv("enhanced_segments", len(overlap_result["segment_audio"])),
         ]
@@ -507,6 +514,7 @@ def process_one(
                     kv("enabled", bool(asr_config.get("enabled", False))),
                     kv("backend", asr_config.get("backend", "")),
                     kv("model", asr_config.get("model", "")),
+                    kv("device", getattr(asr_runner, "resolved_device", asr_config.get("device", ""))),
                     kv("language", asr_config.get("language", "")),
                     kv("unit", "asr_audio"),
                     kv("transcripts", len(transcript)),
@@ -675,9 +683,10 @@ def main() -> int:
     parser.add_argument("--until", choices=["", "pre_asr"], default="")
     parser.add_argument("--from", dest="from_phase", choices=["", "post_asr"], default="")
     parser.add_argument("--dry-run", action="store_true")
+    add_model_option_arguments(parser)
     args = parser.parse_args()
 
-    config = load_config(Path(args.config))
+    config = apply_model_overrides(load_config(Path(args.config)), args)
     dry_run = bool(args.dry_run or config.get("runtime", {}).get("dry_run", False))
     input_path = Path(args.input or config["entrypoint"]["input_path"]).expanduser().resolve()
     output_root = Path(args.output or config["entrypoint"]["output_path"]).expanduser().resolve()

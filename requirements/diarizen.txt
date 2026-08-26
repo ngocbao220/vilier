@@ -1,0 +1,5 @@
+-r vad.txt
+
+# Keep DiariZen in its own environment; it brings its own pyannote stack.
+setuptools<81
+git+https://github.com/BUTSpeechFIT/DiariZen.git

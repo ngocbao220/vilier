@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 
 from .audio import write_wav
+from .devices import resolve_auto_device
 from .schema import relative_path
 
 
@@ -50,6 +51,8 @@ def apply_music_separation(
 
 
 class NoOpMusicSeparator:
+    resolved_device = "dry-run"
+
     def separate_music(self, waveform: np.ndarray, sample_rate: int) -> np.ndarray:
         return np.asarray(waveform, dtype=np.float32).copy()
 
@@ -68,12 +71,7 @@ class DemucsMusicSeparator:
         from demucs.apply import apply_model
         from demucs.pretrained import get_model
 
-        device = str(device).strip().lower()
-        if device == "gpu":
-            device = "cuda"
-        if device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.device = device
+        self.device = resolve_auto_device(torch, device, warn_label="music_separation.device")
         self.shifts = shifts
         self.split = split
         self.overlap = overlap

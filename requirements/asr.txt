@@ -1,0 +1,6 @@
+-r vad.txt
+
+transformers
+accelerate
+sentencepiece
+huggingface_hub

@@ -39,5 +39,6 @@ fi
 if [[ "${DRY_RUN}" == "1" ]]; then
   args+=(--dry-run)
 fi
+args+=("$@")
 
 PYTHONPATH="${SCRIPT_DIR}" "${PYTHON_BIN}" -m pipeline.cli "${args[@]}"

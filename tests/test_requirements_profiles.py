@@ -1,0 +1,30 @@
+import unittest
+from pathlib import Path
+
+
+class RequirementsProfilesTest(unittest.TestCase):
+    def test_root_requirements_uses_default_profile_only(self):
+        requirements = Path("requirements.txt").read_text(encoding="utf-8")
+
+        self.assertIn("-r requirements/pyannote-community.txt", requirements)
+        self.assertNotIn("pyannote.audio[separation]==3.3.2", requirements)
+        self.assertNotIn("nemo_toolkit[asr]", requirements)
+        self.assertNotIn("git+https://github.com/BUTSpeechFIT/DiariZen.git", requirements)
+
+    def test_backend_profiles_are_split_to_avoid_pyannote_conflicts(self):
+        community = Path("requirements/pyannote-community.txt").read_text(encoding="utf-8")
+        pixit = Path("requirements/pyannote-pixit.txt").read_text(encoding="utf-8")
+        diarizen = Path("requirements/diarizen.txt").read_text(encoding="utf-8")
+
+        self.assertIn("pyannote.audio>=4.0", community)
+        self.assertNotIn("pyannote.audio[separation]==3.3.2", community)
+        self.assertIn("pyannote.audio[separation]==3.3.2", pixit)
+        self.assertNotIn("pyannote.audio>=4.0", pixit)
+        self.assertNotIn("pyannote.audio", diarizen)
+
+    def test_no_all_profile_mixes_incompatible_backends(self):
+        self.assertFalse(Path("requirements/all.txt").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -49,6 +49,24 @@ Install dependencies in the active environment:
 python -m pip install -r requirements.txt
 ```
 
+`requirements.txt` installs only the default dependency profile for the current
+`config.json`: Silero VAD plus `pyannote/speaker-diarization-community-1`.
+Do not install every backend into one environment; pyannote Community, pyannote
+PixIT 3.x, Sortformer/NeMo, and DiariZen can require incompatible dependency
+sets.
+
+Use the matching profile when you change backend:
+
+```bash
+python -m pip install -r requirements/pyannote-community.txt
+python -m pip install -r requirements/pyannote-pixit.txt
+python -m pip install -r requirements/sortformer.txt
+python -m pip install -r requirements/diarizen.txt
+python -m pip install -r requirements/demucs.txt
+python -m pip install -r requirements/asr.txt
+python -m pip install -r requirements/sepreformer.txt
+```
+
 `run.sh` reads `entrypoint.input_path` from `config.json`. Set it to one audio file to process only that file:
 
 ```json
@@ -80,6 +98,21 @@ In notebook cells, prefix the shell command with `!`:
 
 The current `config.json` selects one set of models for a run, but each stage can be changed independently.
 VAD and diarization are core pipeline stages, so they always run; configure their backend/model/device in `vad` and `diarization`. Optional stages are controlled by `*.enabled`: `music_separation`, `overlap_separation`, `asr`, and `state_labeling`.
+Model phases that use PyTorch default to `device=auto`, resolved as `cuda` when CUDA is available and `cpu` otherwise. `run.sh` prints the resolved device in the component table before the pipeline starts.
+
+You can override model options from CLI without editing `config.json`:
+
+```bash
+bash run.sh \
+  --diarization-backend sortformer \
+  --diarization-model nvidia/diar_sortformer_4spk-v1 \
+  --diarization-device auto \
+  --enable-asr \
+  --asr-model vinai/PhoWhisper-large \
+  --asr-device auto
+```
+
+Available option groups are `vad`, `diarization`, `music-separation`, `overlap-separation`, `asr`, and `state-labeling`. Each group supports `--<group>-backend` and `--<group>-model`; PyTorch-backed groups also support `--<group>-device`. Optional phases support `--enable-<group>` and `--disable-<group>`.
 
 ## Model Choices
 
@@ -87,9 +120,10 @@ VAD and diarization are core pipeline stages, so they always run; configure thei
 
 | Backend | Config values | Notes |
 |---------|---------------|-------|
-| NVIDIA Sortformer | `diarization.backend=sortformer`, `diarization.model=nvidia/diar_sortformer_4spk-v1` | Uses `nemo.collections.asr.models.SortformerEncLabelModel`. VAD utterances are concatenated into speech-only files shorter than `diarization.max_chunk_seconds`, then diarization timestamps are mapped back to the original timeline. |
-| pyannote PixIT | `diarization.backend=pixit` or `pyannote`, `diarization.model=pyannote/speech-separation-ami-1.0` | Runs on `audio.standardized.wav` directly. Install `pyannote.audio[separation]==3.3.2`, accept the Hugging Face conditions for the pyannote model, and set the token env configured by `diarization.token_env`, usually `HUGGINGFACE_TOKEN`. `diarization.device=auto` uses CUDA if available, then Apple MPS, then CPU. Set `diarization.device=mps` to force Apple GPU on macOS; unsupported MPS ops can still fall back to CPU through PyTorch. |
-| DiariZen | `diarization.backend=diarizen`, `diarization.model=BUT-FIT/diarizen-wavlm-large-s80-md` | Runs on `audio.standardized.wav` directly through `diarizen.pipelines.inference.DiariZenPipeline`. Install DiariZen from `https://github.com/BUTSpeechFIT/DiariZen` in the active environment before using this backend. Upstream releases the model weights under CC BY-NC 4.0, so treat them as research/non-commercial weights. |
+| NVIDIA Sortformer | `diarization.backend=sortformer`, `diarization.model=nvidia/diar_sortformer_4spk-v1` | Uses `nemo.collections.asr.models.SortformerEncLabelModel`. Install `requirements/sortformer.txt`. VAD utterances are concatenated into speech-only files shorter than `diarization.max_chunk_seconds`, then diarization timestamps are mapped back to the original timeline. |
+| pyannote Community | `diarization.backend=pyannote`, `diarization.model=pyannote/speaker-diarization-community-1` | Default config. Install `requirements/pyannote-community.txt`, accept the Hugging Face conditions for the pyannote model, and set the token env configured by `diarization.token_env`, usually `HUGGINGFACE_TOKEN`. |
+| pyannote PixIT | `diarization.backend=pixit` or `pyannote_pixit`, `diarization.model=pyannote/speech-separation-ami-1.0` | Runs on `audio.standardized.wav` directly. Install `requirements/pyannote-pixit.txt` in a separate environment from pyannote Community and DiariZen. `diarization.device=auto` uses CUDA if available, then Apple MPS, then CPU. Set `diarization.device=mps` to force Apple GPU on macOS; unsupported MPS ops can still fall back to CPU through PyTorch. |
+| DiariZen | `diarization.backend=diarizen`, `diarization.model=BUT-FIT/diarizen-wavlm-large-s80-md` | Runs on `audio.standardized.wav` directly through `diarizen.pipelines.inference.DiariZenPipeline`. Install `requirements/diarizen.txt` in its own environment before using this backend. Upstream releases the model weights under CC BY-NC 4.0, so treat them as research/non-commercial weights. |
 
 Example Sortformer config:
 
