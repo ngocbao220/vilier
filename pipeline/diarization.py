@@ -192,45 +192,65 @@ def _patch_torchaudio_audio_metadata() -> None:
     except Exception:
         return
 
-    if hasattr(torchaudio, "AudioMetaData"):
-        return
+    if not hasattr(torchaudio, "AudioMetaData"):
+        for module_name in ("torchaudio._backend.common", "torchaudio.backend.common", "torchaudio._backend.utils"):
+            try:
+                module = importlib.import_module(module_name)
+            except Exception:
+                continue
+            audio_metadata = getattr(module, "AudioMetaData", None)
+            if audio_metadata is not None:
+                torchaudio.AudioMetaData = audio_metadata
+                break
 
-    for module_name in ("torchaudio._backend.common", "torchaudio.backend.common", "torchaudio._backend.utils"):
-        try:
-            module = importlib.import_module(module_name)
-        except Exception:
-            continue
-        audio_metadata = getattr(module, "AudioMetaData", None)
-        if audio_metadata is not None:
-            torchaudio.AudioMetaData = audio_metadata
-            return
+    if not hasattr(torchaudio, "AudioMetaData"):
+        class AudioMetaData:
+            def __init__(
+                self,
+                sample_rate: int,
+                num_frames: int,
+                num_channels: int,
+                bits_per_sample: int,
+                encoding: str,
+            ):
+                self.sample_rate = sample_rate
+                self.num_frames = num_frames
+                self.num_channels = num_channels
+                self.bits_per_sample = bits_per_sample
+                self.encoding = encoding
 
-    class AudioMetaData:
-        def __init__(
-            self,
-            sample_rate: int,
-            num_frames: int,
-            num_channels: int,
-            bits_per_sample: int,
-            encoding: str,
-        ):
-            self.sample_rate = sample_rate
-            self.num_frames = num_frames
-            self.num_channels = num_channels
-            self.bits_per_sample = bits_per_sample
-            self.encoding = encoding
+            def __repr__(self) -> str:
+                return (
+                    "AudioMetaData("
+                    f"sample_rate={self.sample_rate}, "
+                    f"num_frames={self.num_frames}, "
+                    f"num_channels={self.num_channels}, "
+                    f"bits_per_sample={self.bits_per_sample}, "
+                    f"encoding={self.encoding!r})"
+                )
 
-        def __repr__(self) -> str:
-            return (
-                "AudioMetaData("
-                f"sample_rate={self.sample_rate}, "
-                f"num_frames={self.num_frames}, "
-                f"num_channels={self.num_channels}, "
-                f"bits_per_sample={self.bits_per_sample}, "
-                f"encoding={self.encoding!r})"
-            )
+        torchaudio.AudioMetaData = AudioMetaData
 
-    torchaudio.AudioMetaData = AudioMetaData
+    if not hasattr(torchaudio, "list_audio_backends"):
+        def list_audio_backends():
+            backends = []
+            if hasattr(torchaudio, "load") or hasattr(torchaudio, "info"):
+                backends.append("ffmpeg")
+            try:
+                import soundfile  # noqa: F401
+            except Exception:
+                pass
+            else:
+                backends.append("soundfile")
+            return backends or ["ffmpeg"]
+
+        torchaudio.list_audio_backends = list_audio_backends
+
+    if not hasattr(torchaudio, "get_audio_backend"):
+        torchaudio.get_audio_backend = lambda: None
+
+    if not hasattr(torchaudio, "set_audio_backend"):
+        torchaudio.set_audio_backend = lambda backend=None: None
 
 
 def resolve_torch_device(torch_module, requested: str) -> str:

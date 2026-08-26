@@ -613,6 +613,7 @@ class TimelineTest(unittest.TestCase):
 
     def test_torchaudio_audio_metadata_compat_creates_fallback_class(self):
         torchaudio = types.ModuleType("torchaudio")
+        torchaudio.info = lambda path: None
 
         with mock.patch.dict(sys.modules, {"torchaudio": torchaudio}):
             _patch_torchaudio_audio_metadata()
@@ -629,6 +630,24 @@ class TimelineTest(unittest.TestCase):
         self.assertEqual(metadata.num_channels, 1)
         self.assertEqual(metadata.bits_per_sample, 16)
         self.assertEqual(metadata.encoding, "PCM_S")
+        self.assertIn("ffmpeg", torchaudio.list_audio_backends())
+        self.assertIsNone(torchaudio.get_audio_backend())
+        self.assertIsNone(torchaudio.set_audio_backend("soundfile"))
+
+    def test_torchaudio_backend_compat_patches_when_metadata_already_exists(self):
+        class AudioMetaData:
+            pass
+
+        torchaudio = types.ModuleType("torchaudio")
+        torchaudio.AudioMetaData = AudioMetaData
+        torchaudio.load = lambda path: None
+
+        with mock.patch.dict(sys.modules, {"torchaudio": torchaudio}):
+            _patch_torchaudio_audio_metadata()
+
+        self.assertIs(torchaudio.AudioMetaData, AudioMetaData)
+        self.assertIn("ffmpeg", torchaudio.list_audio_backends())
+        self.assertIsNone(torchaudio.get_audio_backend())
 
     def test_load_pyannote_pipeline_omits_auth_when_token_is_empty(self):
         class Pipeline:
