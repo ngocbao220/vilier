@@ -253,6 +253,19 @@ def _patch_torchaudio_audio_metadata() -> None:
     if not hasattr(torchaudio, "set_audio_backend"):
         torchaudio.set_audio_backend = lambda backend=None: None
 
+    if not hasattr(torchaudio, "info"):
+        def info(filepath, **kwargs):
+            import soundfile
+            info_sf = soundfile.info(filepath)
+            return torchaudio.AudioMetaData(
+                sample_rate=info_sf.samplerate,
+                num_frames=info_sf.frames,
+                num_channels=info_sf.channels,
+                bits_per_sample=16,
+                encoding="PCM_S"
+            )
+        torchaudio.info = info
+
 
 def resolve_torch_device(torch_module, requested: str) -> str:
     requested = str(requested or "cpu").strip().lower()
