@@ -205,6 +205,33 @@ def _patch_torchaudio_audio_metadata() -> None:
             torchaudio.AudioMetaData = audio_metadata
             return
 
+    class AudioMetaData:
+        def __init__(
+            self,
+            sample_rate: int,
+            num_frames: int,
+            num_channels: int,
+            bits_per_sample: int,
+            encoding: str,
+        ):
+            self.sample_rate = sample_rate
+            self.num_frames = num_frames
+            self.num_channels = num_channels
+            self.bits_per_sample = bits_per_sample
+            self.encoding = encoding
+
+        def __repr__(self) -> str:
+            return (
+                "AudioMetaData("
+                f"sample_rate={self.sample_rate}, "
+                f"num_frames={self.num_frames}, "
+                f"num_channels={self.num_channels}, "
+                f"bits_per_sample={self.bits_per_sample}, "
+                f"encoding={self.encoding!r})"
+            )
+
+    torchaudio.AudioMetaData = AudioMetaData
+
 
 def resolve_torch_device(torch_module, requested: str) -> str:
     requested = str(requested or "cpu").strip().lower()
