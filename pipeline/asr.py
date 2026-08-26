@@ -92,6 +92,8 @@ def normalize_pipeline_device(device):
         stripped = device.strip()
         if stripped.lstrip("-").isdigit():
             return int(stripped)
+        if stripped.lower() == "gpu":
+            return 0
         return stripped
     return device
 

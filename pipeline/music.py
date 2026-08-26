@@ -68,6 +68,9 @@ class DemucsMusicSeparator:
         from demucs.apply import apply_model
         from demucs.pretrained import get_model
 
+        device = str(device).strip().lower()
+        if device == "gpu":
+            device = "cuda"
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device

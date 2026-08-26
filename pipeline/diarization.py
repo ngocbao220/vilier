@@ -473,6 +473,8 @@ def _patch_torchaudio_audio_metadata() -> None:
 
 def resolve_torch_device(torch_module, requested: str) -> str:
     requested = str(requested or "cpu").strip().lower()
+    if requested == "gpu":
+        requested = "cuda"
     if requested == "":
         return ""
     if requested == "auto":

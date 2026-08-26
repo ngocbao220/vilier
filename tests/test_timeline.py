@@ -49,6 +49,7 @@ class TimelineTest(unittest.TestCase):
         self.assertEqual(normalize_pipeline_device("0"), 0)
         self.assertEqual(normalize_pipeline_device("-1"), -1)
         self.assertEqual(normalize_pipeline_device("cpu"), "cpu")
+        self.assertEqual(normalize_pipeline_device("gpu"), 0)
 
     def test_resolve_torch_device_prefers_cuda_then_mps_for_auto(self):
         torch_module = SimpleNamespace(
@@ -67,6 +68,17 @@ class TimelineTest(unittest.TestCase):
         )
         with self.assertWarns(RuntimeWarning):
             self.assertEqual(resolve_torch_device(torch_module, "mps"), "cpu")
+
+    def test_resolve_torch_device_treats_gpu_as_cuda_alias(self):
+        torch_module = SimpleNamespace(
+            cuda=SimpleNamespace(is_available=lambda: True),
+            backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
+        )
+        self.assertEqual(resolve_torch_device(torch_module, "gpu"), "cuda")
+
+        torch_module.cuda.is_available = lambda: False
+        with self.assertWarns(RuntimeWarning):
+            self.assertEqual(resolve_torch_device(torch_module, "gpu"), "cpu")
 
     def test_pixit_dry_run_reports_dry_run_device(self):
         diarizer = PyannotePixitDiarizer({"backend": "pixit", "device": "auto"}, dry_run=True)

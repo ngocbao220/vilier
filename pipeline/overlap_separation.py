@@ -113,6 +113,9 @@ class SepReformerSeparator:
         import torch
         import yaml
 
+        device = str(device).strip().lower()
+        if device == "gpu":
+            device = "cuda"
         self.sepreformer_path = sepreformer_path.expanduser().resolve()
         self.model_name = _validate_model_name(model_name)
         self.device = torch.device(device)
