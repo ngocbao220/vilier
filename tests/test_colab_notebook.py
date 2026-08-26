@@ -10,8 +10,8 @@ class ColabNotebookTest(unittest.TestCase):
 
         self.assertIn("from google.colab import drive", source)
         self.assertIn("drive.mount('/content/drive')", source)
-        self.assertIn('DRIVE_AUDIO_PATH = "/content/drive/MyDrive/vilier/input/real.wav"', source)
-        self.assertIn('DRIVE_OUTPUT_DIR = "/content/drive/MyDrive/vilier/outputs"', source)
+        self.assertIn('DRIVE_AUDIO_PATH = "/content/drive/MyDrive/VDT-TurnTaking/inputs/real.wav"', source)
+        self.assertIn('DRIVE_OUTPUT_DIR = "/content/drive/MyDrive/VDT-TurnTaking/outputs"', source)
         self.assertIn('os.environ["INPUT_PATH"] = str(audio_path)', source)
         self.assertIn('os.environ["OUTPUT_PATH"] = str(output_dir)', source)
         self.assertIn("!bash run.sh", source)
