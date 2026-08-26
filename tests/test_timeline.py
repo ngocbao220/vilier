@@ -2,6 +2,7 @@ import json
 import builtins
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ import soundfile as sf
 from pipeline.diarization import (
     _allow_torch_checkpoint_globals,
     _load_pyannote_pipeline,
+    _patch_torchaudio_audio_metadata,
     _speechbrain_device,
     _speechbrain_use_auth_token_compat,
     PyannotePixitDiarizer,
@@ -587,6 +589,27 @@ class TimelineTest(unittest.TestCase):
 
         self.assertIn(TorchVersion, Serialization.calls[0])
         self.assertIn(Specifications, Serialization.calls[0])
+
+    def test_torchaudio_audio_metadata_compat_patches_top_level_attribute(self):
+        class AudioMetaData:
+            pass
+
+        torchaudio = types.ModuleType("torchaudio")
+        backend = types.ModuleType("torchaudio._backend")
+        common = types.ModuleType("torchaudio._backend.common")
+        common.AudioMetaData = AudioMetaData
+
+        with mock.patch.dict(
+            sys.modules,
+            {
+                "torchaudio": torchaudio,
+                "torchaudio._backend": backend,
+                "torchaudio._backend.common": common,
+            },
+        ):
+            _patch_torchaudio_audio_metadata()
+
+        self.assertIs(torchaudio.AudioMetaData, AudioMetaData)
 
     def test_load_pyannote_pipeline_omits_auth_when_token_is_empty(self):
         class Pipeline:

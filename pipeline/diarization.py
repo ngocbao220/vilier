@@ -4,6 +4,7 @@ import os
 import re
 import warnings
 from contextlib import contextmanager
+import importlib
 from pathlib import Path
 from typing import Callable
 
@@ -144,6 +145,7 @@ class PyannotePixitDiarizer:
             os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
         import torch
+        _patch_torchaudio_audio_metadata()
         from pyannote.audio import Pipeline
 
         _allow_torch_checkpoint_globals(torch)
@@ -182,6 +184,26 @@ def _allow_torch_checkpoint_globals(torch_module, extra_globals: list | None = N
         safe_globals.extend(extra_globals)
     if safe_globals:
         add_safe_globals(safe_globals)
+
+
+def _patch_torchaudio_audio_metadata() -> None:
+    try:
+        import torchaudio
+    except Exception:
+        return
+
+    if hasattr(torchaudio, "AudioMetaData"):
+        return
+
+    for module_name in ("torchaudio._backend.common", "torchaudio.backend.common", "torchaudio._backend.utils"):
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            continue
+        audio_metadata = getattr(module, "AudioMetaData", None)
+        if audio_metadata is not None:
+            torchaudio.AudioMetaData = audio_metadata
+            return
 
 
 def resolve_torch_device(torch_module, requested: str) -> str:
