@@ -8,3 +8,5 @@ __pycache__/
 *.pth
 .pytest_cache/
 .DS_Store
+notebooks/
+

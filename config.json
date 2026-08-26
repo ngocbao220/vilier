@@ -62,7 +62,7 @@
     "residual_subtract": 0.5
   },
   "overlap_separation": {
-    "enabled": false,
+    "enabled": true,
     "backend": "sepreformer",
     "sepreformer_path": "SepReformer",
     "model_name": "SepReformer_Base_WSJ0",
