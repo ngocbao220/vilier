@@ -17,12 +17,12 @@ def enabled_mark(value) -> str:
     return "V" if bool(value) else "X"
 
 
-def format_component_usage_table(config: dict, runtime_backend: str = "", asr_backend: str = "") -> str:
+def format_component_usage_table(config: dict) -> str:
     rows = []
     for key, label in COMPONENTS:
         section = config.get(key, {})
         enabled = bool(section.get("enabled", key in {"vad", "diarization"}))
-        backend = _configured_backend(key, section, runtime_backend=runtime_backend, asr_backend=asr_backend)
+        backend = _configured_backend(key, section)
         model = _configured_model(key, section)
         rows.append([label, enabled_mark(enabled), backend, model])
 
@@ -38,12 +38,12 @@ def format_component_usage_table(config: dict, runtime_backend: str = "", asr_ba
     return "\n".join(lines)
 
 
-def _configured_backend(key: str, section: dict, runtime_backend: str, asr_backend: str) -> str:
+def _configured_backend(key: str, section: dict) -> str:
     if key == "asr":
-        return asr_backend or str(section.get("asr_backend") or section.get("run_backend") or section.get("backend") or "")
+        return str(section.get("backend") or "")
     if key in {"vad", "diarization", "music_separation", "overlap_separation", "state_labeling"}:
         return str(section.get("backend", ""))
-    return runtime_backend
+    return ""
 
 
 def _configured_model(key: str, section: dict) -> str:
@@ -60,12 +60,10 @@ def _format_row(values: list[str], widths: list[int]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Print enabled/disabled pipeline component usage")
     parser.add_argument("--config", default="config.json")
-    parser.add_argument("--runtime-backend", default="")
-    parser.add_argument("--asr-backend", default="")
     args = parser.parse_args()
 
     config = json.loads(Path(args.config).read_text(encoding="utf-8"))
-    print(format_component_usage_table(config, runtime_backend=args.runtime_backend, asr_backend=args.asr_backend))
+    print(format_component_usage_table(config))
     return 0
 
 

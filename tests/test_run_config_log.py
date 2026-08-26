@@ -15,11 +15,9 @@ class RunConfigLogTest(unittest.TestCase):
                 "diarization": {"backend": "pixit", "model": "pyannote"},
                 "music_separation": {"enabled": False, "backend": "demucs", "model": "htdemucs"},
                 "overlap_separation": {"enabled": True, "backend": "sepreformer", "model_name": "SepReformer_Base_WSJ0"},
-                "asr": {"enabled": False, "asr_backend": "local", "model": "vinai/PhoWhisper-large"},
+                "asr": {"enabled": False, "backend": "phowhisper_local", "model": "vinai/PhoWhisper-large"},
                 "state_labeling": {"enabled": False, "backend": "qwen", "model": "qwen3.8-max"},
-            },
-            runtime_backend="local",
-            asr_backend="kaggle",
+            }
         )
 
         self.assertIn("[INFO] Pipeline component usage", output)
@@ -27,7 +25,7 @@ class RunConfigLogTest(unittest.TestCase):
         self.assertIn("| Diarization        | V", output)
         self.assertIn("| Music separation   | X", output)
         self.assertIn("| Overlap separation | V", output)
-        self.assertIn("| ASR                | X       | kaggle", output)
+        self.assertIn("| ASR                | X       | phowhisper_local", output)
         self.assertIn("| State labeling     | X", output)
 
 

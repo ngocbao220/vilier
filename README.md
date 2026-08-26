@@ -8,7 +8,7 @@ Version 1 focuses only on speaker splitting and timeline reconstruction. Model c
 - NVIDIA Sortformer or pyannote.audio PixIT for speaker diarization.
 - Speech-only diarization chunks built from consecutive VAD utterances when Sortformer is selected.
 - Optional Demucs vocal extraction before SepReformer overlap separation.
-- Local PhoWhisper Large ASR for Vietnamese transcripts.
+- PhoWhisper Large ASR for Vietnamese transcripts.
 - Qwen transcript-based state labeling for speaker-channel ASR segments.
 - Full-duration per-speaker tracks that can be played in parallel.
 - Optional per-speaker segment WAV files.
@@ -33,14 +33,21 @@ Dry-run mode uses deterministic adapters and does not load Sortformer, PixIT, Se
 It also writes placeholder ASR text, so use it only to test file flow and timeline contracts.
 
 ```bash
-PYTHON_BIN=/opt/anaconda3/envs/sommelier/bin/python \
 DRY_RUN=1 \
 INPUT_PATH=inputs/vi_conv_sample_5min.mp3 \
 OUTPUT_PATH=output/ \
-bash run_pipeline.sh
+bash run.sh
 ```
 
+`run.sh` uses the active environment's `python3`/`python` by default. Set `PYTHON_BIN=/path/to/python` only when you intentionally want to override it.
+
 ## Run With Configured Models
+
+Install dependencies in the active environment:
+
+```bash
+python -m pip install -r requirements.txt
+```
 
 `run.sh` reads `entrypoint.input_path` from `config.json`. Set it to one audio file to process only that file:
 
@@ -58,6 +65,18 @@ bash run.sh
 ```
 
 For a one-off run without editing config, `INPUT_PATH=/path/to/audio.wav bash run.sh` still overrides the config value. If `entrypoint.input_path` points to a folder, the pipeline processes every supported audio file in that folder.
+
+On cloud notebooks or GPU VMs such as Kaggle, Colab, RunPod, Paperspace, or a remote server where the repo and audio are already present, run the same script directly:
+
+```bash
+INPUT_PATH=/path/to/mounted/audio.wav bash run.sh
+```
+
+In notebook cells, prefix the shell command with `!`:
+
+```bash
+!INPUT_PATH=/path/to/mounted/audio.wav bash run.sh
+```
 
 The current `config.json` selects one set of models for a run, but each stage can be changed independently.
 VAD and diarization are core pipeline stages, so they always run; configure their backend/model/device in `vad` and `diarization`. Optional stages are controlled by `*.enabled`: `music_separation`, `overlap_separation`, `asr`, and `state_labeling`.
@@ -145,92 +164,15 @@ Example SepReformer config:
 
 | Stage | Config values | Notes |
 |-------|---------------|-------|
-| Local ASR | `asr.enabled=true`, `asr.asr_backend=local`, `asr.backend=phowhisper_local`, `asr.model=vinai/PhoWhisper-large` | Loads PhoWhisper locally through Hugging Face Transformers. |
-| Kaggle ASR | `asr.enabled=true`, `asr.asr_backend=kaggle` | Runs local pre-ASR phases, uploads an ASR bundle, runs PhoWhisper on Kaggle GPU, downloads `transcript.json`, then continues local post-ASR phases. |
-| Skip ASR | `asr.enabled=false` | Skips ASR even if `asr.asr_backend` is set to `kaggle`. |
+| PhoWhisper ASR | `asr.enabled=true`, `asr.backend=phowhisper_local`, `asr.model=vinai/PhoWhisper-large` | Loads PhoWhisper through Hugging Face Transformers in the active environment. On GPU machines, set `asr.device=0`; on CPU set `asr.device=cpu`. |
+| Skip ASR | `asr.enabled=false` | Skips ASR. |
 | Qwen state labeling | `state_labeling.enabled=true`, `state_labeling.model=qwen3.8-max` | Uses DashScope/OpenAI-compatible chat completions. Set `DASHSCOPE_API_KEY` before non-dry runs. |
 
 ## Run PhoWhisper ASR Only
 
 ```bash
-PYTHONPATH=. /opt/anaconda3/envs/sommelier/bin/python -m pipeline.asr /path/to/audio.wav
+PYTHONPATH=. python -m pipeline.asr /path/to/audio.wav
 ```
-
-## Run Full Pipeline On Kaggle GPU
-
-Use this when local PhoWhisper, PixIT, Demucs, or SepReFormer are too slow and you want `bash run.sh` to upload one input audio, run the heavy pipeline stages on Kaggle GPU, then download `outputs/<audio_id>/` back to local.
-
-Set this in `config.json`:
-
-```json
-{
-  "entrypoint": {
-    "input_path": "inputs/haveasip_khanhvi_5m_2.wav",
-    "output_path": "outputs"
-  },
-  "runtime": {
-    "backend": "kaggle",
-    "dry_run": false
-  },
-  "asr": {
-    "enabled": true,
-    "asr_backend": "local"
-  },
-  "kaggle": {
-    "dataset_slug": "ngocbaotrinhtuan/vilier-pipeline-bundle",
-    "kernel_slug": "ngocbaotrinhtuan/vilier-gpu-pipeline",
-    "accelerator": "NvidiaTeslaT4"
-  }
-}
-```
-
-Then run only:
-
-```bash
-bash run.sh
-```
-
-`runtime.backend=kaggle` currently expects exactly one input audio file. The local script creates a Kaggle Dataset with the raw audio, remote config, and the minimal Vilier source bundle, pushes a private Kaggle kernel, waits for completion, downloads `<audio_id>_pipeline_result.zip`, and merges it into `outputs/<audio_id>/`.
-
-If a stage is disabled in config, it stays disabled on Kaggle. For example, `asr.enabled=false` skips ASR even when the runtime backend is `kaggle`. `state_labeling` is always kept local and is disabled inside the Kaggle bundle because it uses a separate text API key flow.
-
-For PixIT on Kaggle, add `HUGGINGFACE_TOKEN` as a Kaggle Secret. Defaults use `kaggle.accelerator=NvidiaTeslaT4` for Kaggle's T4 GPU accelerator instead of P100.
-
-## Run ASR Only On Kaggle GPU
-
-Use `notebooks/kaggle_phowhisper_asr.ipynb` when local VAD/diarization outputs already exist and only PhoWhisper ASR should run on Kaggle GPU. Add a Kaggle Dataset containing a zip of `outputs/<audio_id>/asr_audio`, `vad.json`, and `manifest.timeline.json`; the notebook runs `tools/run_asr_bundle.py` on the remote Kaggle kernel and produces `<audio_id>_asr_result.zip` with `transcript.json` for local download. Bundles from older manifests without `asr_segments` can still fall back to `vad_audio`.
-
-Create the Kaggle input bundle locally with:
-
-```bash
-./bundle.sh <audio_id>
-```
-
-To run the local pre-ASR phases and offload only ASR to Kaggle:
-
-Set this in `config.json`:
-
-```json
-{
-  "runtime": {
-    "backend": "local"
-  },
-  "asr": {
-    "enabled": true,
-    "asr_backend": "kaggle"
-  }
-}
-```
-
-Then run:
-
-```bash
-bash run.sh
-```
-
-`run.sh` reads `entrypoint.input_path`, `entrypoint.output_path`, `runtime.dry_run`, `asr.enabled`, `asr.asr_backend`, and `asr.kaggle` from `config.json`. If `asr.enabled` is `false`, ASR is skipped even when `asr.asr_backend` is `kaggle`.
-
-Defaults use `asr.kaggle.dataset_slug=ngocbaotrinhtuan/vilier-asr-bundle`, `asr.kaggle.kernel_slug=ngocbaotrinhtuan/vilier-phowhisper-asr`, and `asr.kaggle.accelerator=NvidiaTeslaT4` for Kaggle's T4 GPU accelerator instead of P100. `run.sh` will run local pre-ASR phases, create and upload the audio bundle plus minimal ASR source code, wait until Kaggle reports the dataset files are visible, run Kaggle ASR, download `transcript.json`, then continue local state labeling and manifest finalization. Environment variables such as `ASR_BACKEND`, `INPUT_PATH`, `OUTPUT_PATH`, and `KAGGLE_ACCELERATOR` can still override config values for one-off runs.
 
 ## Log Format
 

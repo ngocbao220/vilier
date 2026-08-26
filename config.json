@@ -5,8 +5,7 @@
     "sample_rate": 16000
   },
   "runtime": {
-    "dry_run": false,
-    "backend": "local"
+    "dry_run": false
   },
   "logging": {
     "log_dir": "logs",
@@ -30,30 +29,11 @@
   },
   "asr": {
     "enabled": false,
-    "asr_backend": "local",
     "backend": "phowhisper_local",
     "model": "vinai/PhoWhisper-large",
     "language": "vi",
     "device": "cpu",
-    "chunk_length_seconds": 30.0,
-    "kaggle": {
-      "dataset_slug": "ngocbaotrinhtuan/vilier-asr-bundle",
-      "kernel_slug": "ngocbaotrinhtuan/vilier-phowhisper-asr",
-      "accelerator": "NvidiaTeslaT4",
-      "work_dir": ".kaggle_asr_work",
-      "poll_seconds": 30,
-      "max_wait_seconds": 21600,
-      "dataset_ready_seconds": 240
-    }
-  },
-  "kaggle": {
-    "dataset_slug": "ngocbaotrinhtuan/vilier-pipeline-bundle",
-    "kernel_slug": "ngocbaotrinhtuan/vilier-gpu-pipeline",
-    "accelerator": "NvidiaTeslaT4",
-    "work_dir": ".kaggle_pipeline_work",
-    "poll_seconds": 30,
-    "max_wait_seconds": 21600,
-    "dataset_ready_seconds": 240
+    "chunk_length_seconds": 30.0
   },
   "state_labeling": {
     "enabled": false,
