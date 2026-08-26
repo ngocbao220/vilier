@@ -13,6 +13,7 @@ import soundfile as sf
 
 from pipeline.diarization import (
     _allow_torch_checkpoint_globals,
+    _hf_hub_download_use_auth_token_compat,
     _load_pyannote_pipeline,
     _patch_torchaudio_audio_metadata,
     _speechbrain_device,
@@ -680,6 +681,54 @@ class TimelineTest(unittest.TestCase):
                 (("pyannote/model",), {}),
             ],
         )
+
+    def test_hf_hub_download_compat_maps_use_auth_token_to_token(self):
+        huggingface_hub = types.ModuleType("huggingface_hub")
+        calls = []
+
+        def hf_hub_download(*args, **kwargs):
+            calls.append((args, kwargs))
+            if "use_auth_token" in kwargs:
+                raise TypeError("hf_hub_download() got an unexpected keyword argument 'use_auth_token'")
+            return "model.bin"
+
+        huggingface_hub.hf_hub_download = hf_hub_download
+
+        with mock.patch.dict(sys.modules, {"huggingface_hub": huggingface_hub}):
+            with _hf_hub_download_use_auth_token_compat():
+                result = huggingface_hub.hf_hub_download("repo", "file", use_auth_token="hf_token")
+
+        self.assertEqual(result, "model.bin")
+        self.assertEqual(calls, [(("repo", "file"), {"token": "hf_token"})])
+        self.assertIs(huggingface_hub.hf_hub_download, hf_hub_download)
+
+    def test_hf_hub_download_compat_patches_imported_module_references(self):
+        huggingface_hub = types.ModuleType("huggingface_hub")
+        fetching = types.ModuleType("speechbrain.utils.fetching")
+        calls = []
+
+        def hf_hub_download(*args, **kwargs):
+            calls.append((args, kwargs))
+            if "use_auth_token" in kwargs:
+                raise TypeError("hf_hub_download() got an unexpected keyword argument 'use_auth_token'")
+            return "model.bin"
+
+        huggingface_hub.hf_hub_download = hf_hub_download
+        fetching.hf_hub_download = hf_hub_download
+
+        with mock.patch.dict(
+            sys.modules,
+            {
+                "huggingface_hub": huggingface_hub,
+                "speechbrain.utils.fetching": fetching,
+            },
+        ):
+            with _hf_hub_download_use_auth_token_compat():
+                result = fetching.hf_hub_download("repo", "file", use_auth_token=True)
+
+        self.assertEqual(result, "model.bin")
+        self.assertEqual(calls, [(("repo", "file"), {"token": True})])
+        self.assertIs(fetching.hf_hub_download, hf_hub_download)
 
     def test_speechbrain_compat_removes_unsupported_kwargs(self):
         try:

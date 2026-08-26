@@ -2,6 +2,7 @@ import datetime
 import logging
 import os
 import re
+import sys
 import warnings
 from contextlib import contextmanager
 import importlib
@@ -151,7 +152,7 @@ class PyannotePixitDiarizer:
         _allow_torch_checkpoint_globals(torch)
 
         token = os.environ.get(self.token_env) or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
-        with _speechbrain_use_auth_token_compat():
+        with _hf_hub_download_use_auth_token_compat(), _speechbrain_use_auth_token_compat():
             pipeline = _load_pyannote_pipeline(Pipeline, self.model_name, token)
             resolved_device = resolve_torch_device(torch, self.device)
             self.resolved_device = resolved_device
@@ -288,6 +289,53 @@ def _load_pyannote_pipeline(pipeline_class, model_name: str, token: str | None):
         if "use_auth_token" not in str(exc):
             raise
         return pipeline_class.from_pretrained(model_name)
+
+
+@contextmanager
+def _hf_hub_download_use_auth_token_compat():
+    try:
+        import huggingface_hub
+    except Exception:
+        yield
+        return
+
+    original = getattr(huggingface_hub, "hf_hub_download", None)
+    if not callable(original):
+        yield
+        return
+
+    def compatible_hf_hub_download(*args, **kwargs):
+        if "use_auth_token" in kwargs and "token" not in kwargs:
+            kwargs["token"] = kwargs.pop("use_auth_token")
+        else:
+            kwargs.pop("use_auth_token", None)
+        return original(*args, **kwargs)
+
+    patched = []
+
+    def patch_module(module):
+        if module is None or getattr(module, "hf_hub_download", None) is not original:
+            return
+        module.hf_hub_download = compatible_hf_hub_download
+        patched.append(module)
+
+    patch_module(huggingface_hub)
+    for module_name in (
+        "huggingface_hub.file_download",
+        "huggingface_hub.hf_api",
+        "pyannote.audio.core.io",
+        "pyannote.audio.core.model",
+        "pyannote.audio.core.pipeline",
+        "speechbrain.pretrained.fetching",
+        "speechbrain.utils.fetching",
+    ):
+        patch_module(sys.modules.get(module_name))
+
+    try:
+        yield
+    finally:
+        for module in patched:
+            module.hf_hub_download = original
 
 
 @contextmanager
