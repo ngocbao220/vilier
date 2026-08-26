@@ -291,16 +291,31 @@ class DiariZenDiarizer:
         _patch_torchaudio_audio_metadata()
         
         # Patch SpeakerDiarization to ignore unexpected kwargs (like 'config') that were swallowed by **kwargs in Pyannote < 3.2
+        # and patch torch.load to inject missing 'pyannote.audio' key for older checkpoints
         try:
             import pyannote.audio.pipelines.speaker_diarization
             original_init = pyannote.audio.pipelines.speaker_diarization.SpeakerDiarization.__init__
             
             def patched_init(self, *args, **kwargs):
                 import inspect
+                import torch
+                
                 sig = inspect.signature(original_init)
                 valid_keys = set(sig.parameters.keys())
                 filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_keys or k == "self"}
-                original_init(self, *args, **filtered_kwargs)
+                
+                original_load = torch.load
+                def patched_load(*a, **kw):
+                    ckpt = original_load(*a, **kw)
+                    if isinstance(ckpt, dict) and "pyannote.audio" not in ckpt:
+                        ckpt["pyannote.audio"] = "3.1.1"
+                    return ckpt
+                
+                torch.load = patched_load
+                try:
+                    original_init(self, *args, **filtered_kwargs)
+                finally:
+                    torch.load = original_load
                 
             pyannote.audio.pipelines.speaker_diarization.SpeakerDiarization.__init__ = patched_init
         except Exception:
