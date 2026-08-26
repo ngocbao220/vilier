@@ -19,3 +19,4 @@ huggingface_hub
 pyannote.audio[separation]==3.3.2
 speechbrain
 demucs
+nemo_toolkit[asr]
