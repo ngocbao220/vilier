@@ -1,5 +1,8 @@
 -r vad.txt
 
+# numba 0.66 breaks numba-cuda import used by NeMo on CUDA runtimes:
+# AttributeError: module 'numba.cuda.types' has no attribute 'NPDatetime'
+numba<0.66
 nemo_toolkit[asr]
 speechbrain
 huggingface_hub

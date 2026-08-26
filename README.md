@@ -140,6 +140,13 @@ Example Sortformer config:
 }
 ```
 
+If Sortformer fails with `module 'numba.cuda.types' has no attribute 'NPDatetime'`,
+reinstall the Sortformer profile so NeMo uses the pinned Numba range:
+
+```bash
+python -m pip install -r requirements/sortformer.txt
+```
+
 Example PixIT config:
 
 ```json
