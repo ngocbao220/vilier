@@ -17,7 +17,7 @@ PHASE_OPTIONS = (
     PhaseOption("vad", "vad", ("silero",), has_device=False),
     PhaseOption("diarization", "diarization", ("pyannote", "pixit", "pyannote_pixit", "sortformer", "diarizen")),
     PhaseOption("music_separation", "music-separation", ("demucs",), optional=True),
-    PhaseOption("overlap_separation", "overlap-separation", ("sepreformer",), model_key="model_name", optional=True),
+    PhaseOption("overlap_separation", "overlap-separation", ("sepreformer", "speechbrain"), model_key="model_name", optional=True),
     PhaseOption("asr", "asr", ("phowhisper_local",), optional=True),
     PhaseOption("state_labeling", "state-labeling", ("qwen",), has_device=False, optional=True),
 )

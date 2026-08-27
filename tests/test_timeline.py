@@ -35,8 +35,10 @@ from pipeline.overlap_separation import (
     _find_checkpoint_dir,
     _find_checkpoint_files,
     _import_sepreformer_model_class,
+    _load_torch_checkpoint,
     _resolve_sepreformer_path,
     apply_overlap_separation,
+    load_overlap_separator,
 )
 from pipeline.schema import SpeakerSegment
 from pipeline.timeline import annotate_overlaps, export_audacity_labels, export_segments_and_tracks, write_manifest
@@ -1157,6 +1159,40 @@ class TimelineTest(unittest.TestCase):
         self.assertEqual(sr, sample_rate)
         self.assertEqual(len(mixed), sample_rate)
 
+    def test_load_overlap_separator_supports_speechbrain_backend(self):
+        calls = []
+
+        class SepformerSeparation:
+            @staticmethod
+            def from_hparams(**kwargs):
+                calls.append(kwargs)
+                return object()
+
+        fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+        speechbrain = types.ModuleType("speechbrain")
+        inference = types.ModuleType("speechbrain.inference")
+        separation = types.ModuleType("speechbrain.inference.separation")
+        separation.SepformerSeparation = SepformerSeparation
+
+        with mock.patch.dict(
+            sys.modules,
+            {
+                "torch": fake_torch,
+                "speechbrain": speechbrain,
+                "speechbrain.inference": inference,
+                "speechbrain.inference.separation": separation,
+            },
+        ):
+            separator = load_overlap_separator(
+                {"enabled": True, "backend": "speechbrain", "model_name": "speechbrain/sepformer-wsj02mix", "device": "auto"}
+            )
+
+        self.assertEqual(separator.resolved_device, "cpu")
+        self.assertEqual(separator.model_name, "speechbrain/sepformer-wsj02mix")
+        self.assertEqual(calls[0]["source"], "speechbrain/sepformer-wsj02mix")
+        self.assertEqual(calls[0]["savedir"], "pretrained_models/sepformer-wsj02mix")
+        self.assertEqual(calls[0]["run_opts"], {"device": "cpu"})
+
     def test_resolve_sepreformer_path_uses_project_local_checkout(self):
         resolved = _resolve_sepreformer_path("SepReformer")
 
@@ -1207,6 +1243,23 @@ class TimelineTest(unittest.TestCase):
             self.assertEqual(checkpoints, [checkpoint])
             self.assertEqual(calls[0]["repo_id"], "niobures/SepReformer")
             self.assertIn("**/*.pth", calls[0]["allow_patterns"])
+
+    def test_load_torch_checkpoint_retries_legacy_checkpoint_with_weights_only_false(self):
+        calls = []
+
+        class FakeTorch:
+            @staticmethod
+            def load(path, **kwargs):
+                calls.append((path, kwargs))
+                if "weights_only" not in kwargs:
+                    raise RuntimeError("Weights only load failed. Unsupported operand 118")
+                return {"model_state_dict": {"layer": "weights"}}
+
+        checkpoint = _load_torch_checkpoint(FakeTorch, Path("epoch.0180.pth"), "cpu")
+
+        self.assertEqual(checkpoint["model_state_dict"], {"layer": "weights"})
+        self.assertEqual(calls[0], (Path("epoch.0180.pth"), {"map_location": "cpu"}))
+        self.assertEqual(calls[1], (Path("epoch.0180.pth"), {"map_location": "cpu", "weights_only": False}))
 
     def test_sepreformer_import_ignores_existing_models_and_utils_packages(self):
         with tempfile.TemporaryDirectory() as tmp:

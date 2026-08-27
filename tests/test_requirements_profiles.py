@@ -17,6 +17,7 @@ class RequirementsProfilesTest(unittest.TestCase):
         pixit = Path("requirements/pyannote-pixit.txt").read_text(encoding="utf-8")
         diarizen = Path("requirements/diarizen.txt").read_text(encoding="utf-8")
         sortformer = Path("requirements/sortformer.txt").read_text(encoding="utf-8")
+        speechbrain_separation = Path("requirements/speechbrain-separation.txt").read_text(encoding="utf-8")
 
         self.assertIn("pyannote.audio>=4.0", community)
         self.assertNotIn("pyannote.audio[separation]==3.3.2", community)
@@ -27,6 +28,8 @@ class RequirementsProfilesTest(unittest.TestCase):
         self.assertNotIn("pyannote.audio>=4.0", pixit)
         self.assertNotIn("pyannote.audio", diarizen)
         self.assertIn("numba<0.66", sortformer)
+        self.assertIn("speechbrain", speechbrain_separation)
+        self.assertNotIn("pyannote.audio", speechbrain_separation)
 
     def test_no_all_profile_mixes_incompatible_backends(self):
         self.assertFalse(Path("requirements/all.txt").exists())

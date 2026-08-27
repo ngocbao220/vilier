@@ -7,14 +7,14 @@ Version 1 focuses only on speaker splitting and timeline reconstruction. Model c
 - Silero VAD for local speech activity detection.
 - NVIDIA Sortformer or pyannote.audio PixIT for speaker diarization.
 - Speech-only diarization chunks built from consecutive VAD utterances when Sortformer is selected.
-- Optional Demucs vocal extraction before SepReformer overlap separation.
+- Optional Demucs vocal extraction before overlap separation.
 - PhoWhisper Large ASR for Vietnamese transcripts.
 - Qwen transcript-based state labeling for speaker-channel ASR segments.
 - Full-duration per-speaker tracks that can be played in parallel.
 - Optional per-speaker segment WAV files.
 - Audacity-compatible label files for VAD and speaker segments.
 
-Transcript runs after VAD and diarization. Optional Demucs music separation can clean the waveform before SepReformer, speaker-track export, and ASR. After speaker tracks are exported, a second VAD pass segments each speaker channel for `vinai/PhoWhisper-large` ASR and Qwen labeling.
+Transcript runs after VAD and diarization. Optional Demucs music separation can clean the waveform before overlap separation, speaker-track export, and ASR. After speaker tracks are exported, a second VAD pass segments each speaker channel for `vinai/PhoWhisper-large` ASR and Qwen labeling.
 State labeling runs after ASR. Qwen receives transcript text only and assigns one configured label, initially `complete` or `incomplete`.
 
 ## Layout
@@ -29,7 +29,7 @@ vilier/
 
 ## Run A Smoke Test Without Heavy Models
 
-Dry-run mode uses deterministic adapters and does not load Sortformer, PixIT, SepReformer, PhoWhisper, or Qwen.
+Dry-run mode uses deterministic adapters and does not load Sortformer, PixIT, SpeechBrain, SepReformer, PhoWhisper, or Qwen.
 It also writes placeholder ASR text, so use it only to test file flow and timeline contracts.
 
 ```bash
@@ -66,6 +66,7 @@ python -m pip install -r requirements/diarizen.txt
 python -m pip install -r requirements/demucs.txt
 python -m pip install -r requirements/asr.txt
 python -m pip install -r requirements/sepreformer.txt
+python -m pip install -r requirements/speechbrain-separation.txt
 ```
 
 `run.sh` reads `entrypoint.input_path` from `config.json`. Set it to one audio file to process only that file:
@@ -182,15 +183,22 @@ Example DiariZen config:
 | Backend | Config values | Notes |
 |---------|---------------|-------|
 | Disabled | `music_separation.enabled=false` | Keeps the standardized waveform unchanged. |
-| Demucs | `music_separation.enabled=true`, `music_separation.backend=demucs`, `music_separation.model=htdemucs` | Extracts vocals before SepReformer overlap separation. Increase `music_separation.residual_subtract` gradually if accompaniment still leaks into `music_cleaned.wav`; higher values can distort speech. |
+| Demucs | `music_separation.enabled=true`, `music_separation.backend=demucs`, `music_separation.model=htdemucs` | Extracts vocals before overlap separation. Increase `music_separation.residual_subtract` gradually if accompaniment still leaks into `music_cleaned.wav`; higher values can distort speech. |
 
 ### Overlap Separation
 
-SepReformer is optional. If `overlap_separation.enabled=false`, overlapping regions remain unchanged and the pipeline still exports diarization labels and speaker tracks.
+Overlap separation is optional. If `overlap_separation.enabled=false`, overlapping regions remain unchanged and the pipeline still exports diarization labels and speaker tracks.
 
 | Backend | Config values | Notes |
 |---------|---------------|-------|
+| SpeechBrain SepFormer | `overlap_separation.backend=speechbrain`, `overlap_separation.model_name=speechbrain/sepformer-wsj02mix` | Downloads and runs the SpeechBrain SepFormer 2-speaker separation model through `speechbrain.inference.separation.SepformerSeparation`. Install `requirements/speechbrain-separation.txt`. |
 | SepReformer | `overlap_separation.backend=sepreformer`, `overlap_separation.model_name=<model_dir>` | `model_name` is the directory under `SepReFormer/models`. If the checkpoint is not present locally, set `overlap_separation.checkpoint_repo` to a Hugging Face repo such as `niobures/SepReformer`; the pipeline downloads `.pt`/`.pth` checkpoint files when overlap separation is enabled. |
+
+PyTorch 2.6+ loads checkpoints with `weights_only=True` by default. Some legacy
+SepReformer `.pth` files require the older pickle loader, so Vilier retries that
+checkpoint with `weights_only=False` only after the first load fails with a
+`weights_only` error. Use this path only for SepReformer checkpoints you trust,
+such as your configured local checkpoint or `niobures/SepReformer`.
 
 Model directories present in this checkout:
 
@@ -215,6 +223,20 @@ Example SepReformer config:
     "checkpoint_repo": "niobures/SepReformer",
     "checkpoint_revision": "",
     "device": "cpu",
+    "overlap_threshold_seconds": 0.2
+  }
+}
+```
+
+Example SpeechBrain config:
+
+```json
+{
+  "overlap_separation": {
+    "enabled": true,
+    "backend": "speechbrain",
+    "model_name": "speechbrain/sepformer-wsj02mix",
+    "device": "auto",
     "overlap_threshold_seconds": 0.2
   }
 }
@@ -319,11 +341,11 @@ It also includes `transcript`, with one speaker-tagged transcript record per spe
 `transcript.json` contains the same transcript records as a standalone inspectable file.
 `vad.txt` is a tab-separated view of the same VAD intervals: `start_time<TAB>end_time<TAB>label`.
 `vad_audio/audio_*.wav` contains one WAV file per source-audio VAD utterance, numbered from `audio_1.wav` in VAD order. These files are for VAD review and diarization support, not the default ASR input.
-`music_cleaned.wav` is written only when `music_separation.enabled` is active. SepReformer, speaker tracks, and downstream ASR use this cleaned waveform.
+`music_cleaned.wav` is written only when `music_separation.enabled` is active. Overlap separation, speaker tracks, and downstream ASR use this cleaned waveform.
 `asr_audio/SPEAKER_*/*.wav` contains speech segments detected on each exported speaker track. These files are the default ASR and Qwen labeling input.
 `diarization_chunks/chunk_*.wav` contains concatenated VAD utterances for Sortformer compatibility. PixIT diarization runs on `audio.standardized.wav` directly.
-When `music_separation.enabled` is `true`, Demucs runs before SepReformer so overlap separation receives the vocal-cleaned waveform, following the Sommelier ordering.
-When `overlap_separation.enabled` is `true`, overlapping speaker regions are separated before speaker tracks are exported. This follows the Sommelier SepReformer flow: detect overlapping diarization pairs, write the mixed and separated overlap snippets under `overlap/`, separate only the mixed overlap region, match separated source volume to each speaker's non-overlap RMS, then reconstruct enhanced per-speaker audio for track export.
+When `music_separation.enabled` is `true`, Demucs runs before overlap separation so the separator receives the vocal-cleaned waveform.
+When `overlap_separation.enabled` is `true`, overlapping speaker regions are separated before speaker tracks are exported: detect overlapping diarization pairs, write the mixed and separated overlap snippets under `overlap/`, separate only the mixed overlap region, match separated source volume to each speaker's non-overlap RMS, then reconstruct enhanced per-speaker audio for track export.
 
 ## Audacity Import
 
@@ -343,6 +365,6 @@ All label files use Audacity's tab-separated format: `start_time<TAB>end_time<TA
 Segment WAV export is disabled by default for faster Audacity-oriented generation. Set `export.write_segment_wavs` to `true` in `config.json` when you need individual files under `segments/SPEAKER_*`.
 Matplotlib visualization export is also disabled by default. Set `export.write_visualizations` to `true` when you need PNG files under `visualization/`.
 
-Set `overlap_separation.enabled` to `false` to skip SepReFormer. When it is enabled, point `overlap_separation.sepreformer_path` to the local `SepReFormer` checkout and choose a `model_name` whose checkpoint exists.
+Set `overlap_separation.enabled` to `false` to skip overlap separation. With `backend=speechbrain`, `model_name` is the SpeechBrain source such as `speechbrain/sepformer-wsj02mix`; with `backend=sepreformer`, point `overlap_separation.sepreformer_path` to the local `SepReFormer` checkout and choose a `model_name` whose checkpoint exists.
 
 `tracks/SPEAKER_*.wav` are full-duration files. Playing them in parallel reconstructs the speaker timing from the original conversation.

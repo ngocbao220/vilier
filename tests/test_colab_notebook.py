@@ -16,8 +16,10 @@ class ColabNotebookTest(unittest.TestCase):
         self.assertIn('os.environ["OUTPUT_PATH"] = str(output_dir)', source)
         self.assertIn('"pyannote/speaker-diarization-3.1"', source)
         self.assertIn('PYANNOTE_PROFILE = "pyannote-3.1"', source)
-        self.assertIn('SEPREFORMER_CHECKPOINT_REPO = "niobures/SepReformer"', source)
-        self.assertIn('config["overlap_separation"]["checkpoint_repo"] = SEPREFORMER_CHECKPOINT_REPO', source)
+        self.assertIn("requirements/speechbrain-separation.txt", source)
+        self.assertIn('OVERLAP_SEPARATION_BACKEND = "speechbrain"', source)
+        self.assertIn('OVERLAP_SEPARATION_MODEL = "speechbrain/sepformer-wsj02mix"', source)
+        self.assertIn('config["overlap_separation"]["backend"] = OVERLAP_SEPARATION_BACKEND', source)
         self.assertIn("!bash run.sh", source)
         self.assertNotIn("/kaggle/input", source)
 

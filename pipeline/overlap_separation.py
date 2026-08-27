@@ -163,32 +163,35 @@ class SpeechBrainSeparator:
     def __init__(self, source: str = "speechbrain/sepformer-wsj02mix", device: str = "cpu"):
         import torch
         from speechbrain.inference.separation import SepformerSeparation
+
+        self.model_name = source
         self.resolved_device = resolve_auto_device(torch, device, warn_label="overlap_separation.device")
         savedir = f"pretrained_models/{source.split('/')[-1]}"
         self.model = SepformerSeparation.from_hparams(
             source=source,
             savedir=savedir,
-            run_opts={"device": self.resolved_device}
+            run_opts={"device": self.resolved_device},
         )
 
     def separate(self, audio_segment: np.ndarray, sample_rate: int):
         import torch
         import librosa
+
         if sample_rate != 8000:
             audio_8k = librosa.resample(audio_segment, orig_sr=sample_rate, target_sr=8000)
         else:
             audio_8k = audio_segment
-            
+
         mixture = torch.tensor(audio_8k, dtype=torch.float32).unsqueeze(0).to(self.resolved_device)
         est_sources = self.model.separate_batch(mixture)
-        
+
         src1 = est_sources[0, :, 0].detach().cpu().numpy()
         src2 = est_sources[0, :, 1].detach().cpu().numpy()
-        
+
         if sample_rate != 8000:
             src1 = librosa.resample(src1, orig_sr=8000, target_sr=sample_rate)
             src2 = librosa.resample(src2, orig_sr=8000, target_sr=sample_rate)
-            
+
         return _match_length(src1, len(audio_segment)), _match_length(src2, len(audio_segment))
 
 
@@ -231,7 +234,7 @@ class SepReformerSeparator:
             )
             self.model = Model(**self.config["model"])
             self.checkpoint_path = checkpoints[-1]
-            checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
+            checkpoint = _load_torch_checkpoint(torch, self.checkpoint_path, self.device)
             self.model.load_state_dict(checkpoint["model_state_dict"])
             self.model = self.model.to(self.device)
             self.model.eval()
@@ -413,6 +416,20 @@ def _download_checkpoint_snapshot(
     except TypeError:
         downloaded = snapshot_download(**kwargs)
     return Path(downloaded)
+
+
+def _load_torch_checkpoint(torch_module, checkpoint_path: Path, device):
+    try:
+        return torch_module.load(checkpoint_path, map_location=device)
+    except Exception as exc:
+        if not _is_torch_weights_only_error(exc):
+            raise
+        return torch_module.load(checkpoint_path, map_location=device, weights_only=False)
+
+
+def _is_torch_weights_only_error(exc: Exception) -> bool:
+    message = str(exc)
+    return "Weights only load failed" in message or "weights_only" in message
 
 
 def _assign_sources_by_energy(seg1: SpeakerSegment, seg2: SpeakerSegment, src1: np.ndarray, src2: np.ndarray):
