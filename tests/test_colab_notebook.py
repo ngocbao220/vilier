@@ -10,6 +10,7 @@ class ColabNotebookTest(unittest.TestCase):
 
         self.assertIn("from google.colab import drive", source)
         self.assertIn("drive.mount('/content/drive')", source)
+        self.assertIn("!rm -rf /content/vilier", source)
         self.assertIn('DRIVE_AUDIO_PATH = "/content/drive/MyDrive/VDT-TurnTaking/inputs/real.wav"', source)
         self.assertIn('DRIVE_OUTPUT_DIR = "/content/drive/MyDrive/VDT-TurnTaking/outputs"', source)
         self.assertIn('os.environ["INPUT_PATH"] = str(audio_path)', source)
@@ -20,7 +21,10 @@ class ColabNotebookTest(unittest.TestCase):
         self.assertIn('OVERLAP_SEPARATION_BACKEND = "speechbrain"', source)
         self.assertIn('OVERLAP_SEPARATION_MODEL = "speechbrain/sepformer-wsj02mix"', source)
         self.assertIn('config["overlap_separation"]["backend"] = OVERLAP_SEPARATION_BACKEND', source)
-        self.assertIn("!bash run.sh", source)
+        self.assertIn(
+            "!bash run.sh --enable-overlap-separation --overlap-separation-backend speechbrain --overlap-separation-model speechbrain/sepformer-wsj02mix",
+            source,
+        )
         self.assertNotIn("/kaggle/input", source)
 
     def test_colab_notebook_has_no_saved_outputs(self):
