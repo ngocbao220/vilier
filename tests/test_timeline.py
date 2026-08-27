@@ -24,9 +24,11 @@ from pipeline.diarization import (
     load_diarizer,
     PyannotePixitDiarizer,
     build_diarization_chunks,
+    build_speaker_linking_artifact,
     pyannote_annotation_to_segments,
     remap_chunk_segments_to_original,
     resolve_torch_device,
+    write_speaker_linking_artifact,
 )
 from pipeline.music import _suppress_accompaniment, apply_music_separation, load_music_separator
 from pipeline.overlap_separation import _find_checkpoint_dir, _import_sepreformer_model_class, _resolve_sepreformer_path, apply_overlap_separation
@@ -221,7 +223,52 @@ class TimelineTest(unittest.TestCase):
             self.assertEqual(data["source_audio"], "inputs/source.wav")
             self.assertEqual(data["transcript"], [])
             self.assertEqual(len(data["segments"]), 2)
+            self.assertEqual(data["speaker_linking"], {"audio": "", "strategy": "", "link_count": 0, "embedding_count": 0})
+            self.assertEqual(data["run_config"], {"audio": ""})
             self.assertEqual(data["vad_segments"], [{"id": "vad_00000", "start": 0.0, "end": 1.5, "duration": 1.5}])
+
+    def test_speaker_linking_artifact_describes_native_global_backend(self):
+        segments = [
+            SpeakerSegment("a", "SPEAKER_00", 0.0, 1.0),
+            SpeakerSegment("b", "SPEAKER_00", 2.0, 3.5),
+            SpeakerSegment("c", "SPEAKER_01", 4.0, 5.0),
+        ]
+        payload = build_speaker_linking_artifact(
+            backend="pyannote",
+            model="pyannote/speaker-diarization-community-1",
+            segments=segments,
+            chunks=[],
+        )
+
+        self.assertEqual(payload["strategy"], "native_global")
+        self.assertEqual(payload["chunk_count"], 0)
+        self.assertEqual(payload["speakers"][0], {"speaker": "SPEAKER_00", "segments": 2, "duration": 2.5})
+        self.assertEqual(payload["links"], [])
+        self.assertEqual(payload["embeddings"], [])
+
+    def test_write_speaker_linking_artifact_writes_summary_and_json(self):
+        payload = {
+            "backend": "sortformer",
+            "model": "nvidia/diar_sortformer_4spk-v1",
+            "strategy": "ecapa_chunk_clustering",
+            "embedding_model": "speechbrain/spkrec-ecapa-voxceleb",
+            "chunk_count": 2,
+            "speakers": [{"speaker": "SPEAKER_00", "segments": 2, "duration": 3.0}],
+            "links": [{"chunk_index": 1, "local_speaker": "SPEAKER_00", "global_speaker": "SPEAKER_00"}],
+            "embeddings": [{"chunk_index": 1, "local_speaker": "SPEAKER_00", "dimension": 2, "vector": [0.1, 0.2]}],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            summary = write_speaker_linking_artifact(out, payload)
+            data = json.loads((out / "speaker_linking.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(summary["audio"], "speaker_linking.json")
+        self.assertEqual(summary["strategy"], "ecapa_chunk_clustering")
+        self.assertEqual(summary["speaker_count"], 1)
+        self.assertEqual(summary["link_count"], 1)
+        self.assertEqual(summary["embedding_count"], 1)
+        self.assertEqual(summary["embedding_model"], "speechbrain/spkrec-ecapa-voxceleb")
+        self.assertEqual(data["embeddings"][0]["vector"], [0.1, 0.2])
 
     def test_apply_music_separation_writes_cleaned_audio(self):
         class FakeMusicSeparator:
@@ -1075,6 +1122,34 @@ class TimelineTest(unittest.TestCase):
         np.testing.assert_allclose(result["segment_audio"]["a"][10:20], 0.3, atol=1e-6)
         np.testing.assert_allclose(result["segment_audio"]["a"][20:30], 0.3)
         np.testing.assert_allclose(result["segment_audio"]["b"], 0.07, atol=1e-6)
+
+    def test_overlap_separation_writes_overlap_audio_artifacts(self):
+        class FakeSeparator:
+            resolved_device = "dry-run"
+
+            def separate(self, audio_segment, sample_rate):
+                return np.full_like(audio_segment, 0.8), np.full_like(audio_segment, 0.2)
+
+        sample_rate = 10
+        waveform = np.full(sample_rate * 4, 0.1, dtype=np.float32)
+        segments = [
+            SpeakerSegment("a", "SPEAKER_00", 0.0, 3.0),
+            SpeakerSegment("b", "SPEAKER_01", 1.0, 2.0),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            result = apply_overlap_separation(waveform, sample_rate, segments, FakeSeparator(), overlap_threshold=0.1, output_dir=out)
+            region = result["overlap_regions"][0]
+
+            self.assertEqual(region["id"], "overlap_00001")
+            self.assertEqual(region["mixed_audio"], "overlap/overlap_00001_mixed.wav")
+            self.assertEqual(region["separated_audio"]["SPEAKER_00"], "overlap/overlap_00001_SPEAKER_00.wav")
+            self.assertTrue((out / "overlap" / "overlap_00001_mixed.wav").exists())
+            self.assertTrue((out / "overlap" / "overlap_00001_SPEAKER_00.wav").exists())
+            mixed, sr = sf.read(out / region["mixed_audio"], dtype="float32")
+
+        self.assertEqual(sr, sample_rate)
+        self.assertEqual(len(mixed), sample_rate)
 
     def test_resolve_sepreformer_path_uses_project_local_checkout(self):
         resolved = _resolve_sepreformer_path("SepReformer")

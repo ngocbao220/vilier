@@ -1,4 +1,5 @@
 import datetime
+import json
 import logging
 import os
 import re
@@ -29,12 +30,84 @@ def load_diarizer(config: dict, dry_run: bool = False):
     raise ValueError(f"Unsupported diarization backend: {backend}")
 
 
+def build_speaker_linking_artifact(
+    backend: str,
+    model: str,
+    segments: list[SpeakerSegment],
+    chunks: list[dict] | None = None,
+    linking: dict | None = None,
+) -> dict:
+    chunk_count = len(chunks or [])
+    payload = {
+        "backend": str(backend),
+        "model": str(model),
+        "chunk_count": chunk_count,
+        "strategy": "native_global",
+        "reason": "Backend ran on the full standardized audio, so speaker ids are emitted as run-level ids by the diarization model.",
+        "speakers": _speaker_stats(segments),
+        "links": [],
+        "embeddings": [],
+    }
+    if linking:
+        payload.update(linking)
+        payload["speakers"] = _speaker_stats(segments)
+        payload["chunk_count"] = chunk_count
+    return payload
+
+
+def write_speaker_linking_artifact(output_dir: Path, payload: dict) -> dict:
+    path = output_dir / "speaker_linking.json"
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    summary = {
+        "audio": relative_path(path, output_dir),
+        "strategy": str(payload.get("strategy", "")),
+        "backend": str(payload.get("backend", "")),
+        "model": str(payload.get("model", "")),
+        "chunk_count": int(payload.get("chunk_count", 0)),
+        "speaker_count": len(payload.get("speakers", [])),
+        "link_count": len(payload.get("links", [])),
+        "embedding_count": len(payload.get("embeddings", [])),
+    }
+    if "embedding_model" in payload:
+        summary["embedding_model"] = str(payload.get("embedding_model", ""))
+    return summary
+
+
+def _speaker_stats(segments: list[SpeakerSegment]) -> list[dict]:
+    stats = {}
+    for segment in segments:
+        item = stats.setdefault(segment.speaker, {"speaker": segment.speaker, "segments": 0, "duration": 0.0})
+        item["segments"] += 1
+        item["duration"] += max(0.0, float(segment.end) - float(segment.start))
+    return [
+        {
+            "speaker": item["speaker"],
+            "segments": item["segments"],
+            "duration": round(item["duration"], 3),
+        }
+        for item in sorted(stats.values(), key=lambda entry: entry["speaker"])
+    ]
+
+
+def _speaker_embedding_record(chunk: dict, chunk_idx: int, speaker: str, embedding: np.ndarray) -> dict:
+    vector = np.asarray(embedding, dtype=float).reshape(-1)
+    return {
+        "chunk_index": chunk_idx,
+        "chunk_id": str(chunk.get("id", f"chunk_{chunk_idx}")),
+        "local_speaker": str(speaker),
+        "dimension": int(vector.size),
+        "vector": [round(float(value), 6) for value in vector.tolist()],
+    }
+
+
 class SortformerDiarizer:
     def __init__(self, config: dict, dry_run: bool = False):
         self.config = config
         self.dry_run = dry_run
         self.nemo_log_level = str(config.get("nemo_log_level", "WARNING")).upper()
         self.resolved_device = "dry-run" if dry_run else ""
+        self.speaker_linking = {}
         self.model = None if dry_run else self._load_model()
 
     def diarize(self, audio_path: Path, vad_segments: list[dict]) -> list[SpeakerSegment]:
@@ -65,9 +138,15 @@ class SortformerDiarizer:
         if total > 1:
             if progress_callback is not None:
                 progress_callback(total, total, "clustering global speakers")
-            global_mapping = self._cluster_local_speakers(chunk_results)
+            global_mapping, self.speaker_linking = self._cluster_local_speakers(chunk_results)
         else:
             global_mapping = None
+            self.speaker_linking = {
+                "strategy": "single_chunk",
+                "reason": "Only one diarization chunk; local speaker ids are already run-level ids.",
+                "links": [],
+                "embeddings": [],
+            }
 
         for chunk_idx, (chunk, chunk_segments) in enumerate(chunk_results, start=1):
             if global_mapping:
@@ -76,7 +155,7 @@ class SortformerDiarizer:
             segments.extend(remap_chunk_segments_to_original(chunk_segments, chunk["mapping"], chunk_idx, min_duration))
         return segments
 
-    def _cluster_local_speakers(self, chunk_results: list[tuple[dict, list[SpeakerSegment]]]) -> dict:
+    def _cluster_local_speakers(self, chunk_results: list[tuple[dict, list[SpeakerSegment]]]) -> tuple[dict, dict]:
         import torch
         import torchaudio
         from speechbrain.inference.speaker import EncoderClassifier
@@ -96,9 +175,16 @@ class SortformerDiarizer:
         except Exception as e:
             import logging
             logging.warning(f"Could not load ECAPA-TDNN for global clustering: {e}")
-            return {}
+            return {}, {
+                "strategy": "embedding_unavailable",
+                "embedding_model": "speechbrain/spkrec-ecapa-voxceleb",
+                "reason": str(e),
+                "links": [],
+                "embeddings": [],
+            }
 
         embeddings_list = []
+        embedding_records = []
         labels = []
 
         for chunk_idx, (chunk, chunk_segments) in enumerate(chunk_results, start=1):
@@ -132,16 +218,30 @@ class SortformerDiarizer:
                 if emb.ndim == 1:
                     embeddings_list.append(emb)
                     labels.append((chunk_idx, speaker))
+                    embedding_records.append(_speaker_embedding_record(chunk, chunk_idx, speaker, emb))
                 elif emb.ndim == 0:
-                    embeddings_list.append(np.expand_dims(emb, 0))
+                    emb = np.expand_dims(emb, 0)
+                    embeddings_list.append(emb)
                     labels.append((chunk_idx, speaker))
+                    embedding_records.append(_speaker_embedding_record(chunk, chunk_idx, speaker, emb))
 
         if not embeddings_list:
-            return {}
+            return {}, {
+                "strategy": "embedding_unavailable",
+                "embedding_model": "speechbrain/spkrec-ecapa-voxceleb",
+                "reason": "No speaker audio was available for embedding extraction.",
+                "links": [],
+                "embeddings": [],
+            }
             
         X = np.stack(embeddings_list)
         if len(X) < 2:
-            return {}
+            return {}, {
+                "strategy": "single_embedding",
+                "embedding_model": "speechbrain/spkrec-ecapa-voxceleb",
+                "links": [],
+                "embeddings": embedding_records,
+            }
 
         distances = pdist(X, metric='cosine')
         Z = linkage(distances, method='average')
@@ -150,10 +250,28 @@ class SortformerDiarizer:
         cluster_labels = fcluster(Z, t=0.6, criterion='distance')
         
         mapping = {}
+        links = []
         for (chunk_idx, old_spk), cluster_id in zip(labels, cluster_labels):
-            mapping[(chunk_idx, old_spk)] = f"SPEAKER_{cluster_id - 1:02d}"
+            global_speaker = f"SPEAKER_{cluster_id - 1:02d}"
+            mapping[(chunk_idx, old_spk)] = global_speaker
+            links.append(
+                {
+                    "chunk_index": chunk_idx,
+                    "local_speaker": old_spk,
+                    "global_speaker": global_speaker,
+                    "cluster_id": int(cluster_id),
+                }
+            )
             
-        return mapping
+        return mapping, {
+            "strategy": "ecapa_chunk_clustering",
+            "embedding_model": "speechbrain/spkrec-ecapa-voxceleb",
+            "distance": "cosine",
+            "cluster_method": "average",
+            "threshold": 0.6,
+            "links": links,
+            "embeddings": embedding_records,
+        }
 
     def _diarize_audio(self, audio_path: Path) -> list[SpeakerSegment]:
         _configure_nemo_logging(self.nemo_log_level)
@@ -206,6 +324,12 @@ class SortformerDiarizer:
                     )
                 )
                 idx += 1
+        self.speaker_linking = {
+            "strategy": "dry_run",
+            "reason": "Dry-run alternates speakers deterministically and does not extract embeddings.",
+            "links": [],
+            "embeddings": [],
+        }
         return segments
 
 

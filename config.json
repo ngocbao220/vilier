@@ -65,7 +65,7 @@
     "enabled": false,
     "backend": "sepreformer",
     "sepreformer_path": "SepReformer",
-    "model_name": "SepReformer_Large_DM_WHAMR",
+    "model_name": "SepReformer_Base_WSJ0",
     "device": "auto",
     "overlap_threshold_seconds": 0.2
   }

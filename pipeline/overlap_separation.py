@@ -6,8 +6,9 @@ from typing import Callable
 
 import numpy as np
 
+from .audio import write_wav
 from .devices import resolve_auto_device
-from .schema import SpeakerSegment
+from .schema import SpeakerSegment, relative_path
 
 
 def apply_overlap_separation(
@@ -16,6 +17,7 @@ def apply_overlap_separation(
     segments: list[SpeakerSegment],
     separator,
     overlap_threshold: float,
+    output_dir: Path | None = None,
     progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> dict:
     if separator is None:
@@ -48,15 +50,10 @@ def apply_overlap_separation(
 
         separated_regions[pair["seg1"].id].append({"start": start, "end": end, "audio": seg1_audio})
         separated_regions[pair["seg2"].id].append({"start": start, "end": end, "audio": seg2_audio})
-        overlap_regions.append(
-            {
-                "start": round(start, 3),
-                "end": round(end, 3),
-                "duration": round(end - start, 6),
-                "speakers": [pair["seg1"].speaker, pair["seg2"].speaker],
-                "segments": [pair["seg1"].id, pair["seg2"].id],
-            }
-        )
+        region_record = _overlap_region_record(pair_idx, pair, start, end)
+        if output_dir is not None:
+            region_record.update(_write_overlap_region_audio(output_dir, pair_idx, pair, overlap_audio, seg1_audio, seg2_audio, sample_rate))
+        overlap_regions.append(region_record)
 
     segment_audio = {}
     for segment in segments:
@@ -66,6 +63,44 @@ def apply_overlap_separation(
         segment_audio[segment.id] = _reconstruct_segment_audio(waveform, sample_rate, segment, regions)
 
     return {"segment_audio": segment_audio, "overlap_regions": overlap_regions}
+
+
+def _overlap_region_record(pair_idx: int, pair: dict, start: float, end: float) -> dict:
+    return {
+        "id": f"overlap_{pair_idx:05d}",
+        "start": round(start, 3),
+        "end": round(end, 3),
+        "duration": round(end - start, 6),
+        "speakers": [pair["seg1"].speaker, pair["seg2"].speaker],
+        "segments": [pair["seg1"].id, pair["seg2"].id],
+    }
+
+
+def _write_overlap_region_audio(
+    output_dir: Path,
+    pair_idx: int,
+    pair: dict,
+    mixed_audio: np.ndarray,
+    speaker_1_audio: np.ndarray,
+    speaker_2_audio: np.ndarray,
+    sample_rate: int,
+) -> dict:
+    overlap_dir = output_dir / "overlap"
+    overlap_dir.mkdir(parents=True, exist_ok=True)
+    region_id = f"overlap_{pair_idx:05d}"
+    mixed_path = overlap_dir / f"{region_id}_mixed.wav"
+    speaker_1_path = overlap_dir / f"{region_id}_{pair['seg1'].speaker}.wav"
+    speaker_2_path = overlap_dir / f"{region_id}_{pair['seg2'].speaker}.wav"
+    write_wav(mixed_path, np.asarray(mixed_audio, dtype=np.float32), sample_rate)
+    write_wav(speaker_1_path, np.asarray(speaker_1_audio, dtype=np.float32), sample_rate)
+    write_wav(speaker_2_path, np.asarray(speaker_2_audio, dtype=np.float32), sample_rate)
+    return {
+        "mixed_audio": relative_path(mixed_path, output_dir),
+        "separated_audio": {
+            pair["seg1"].speaker: relative_path(speaker_1_path, output_dir),
+            pair["seg2"].speaker: relative_path(speaker_2_path, output_dir),
+        },
+    }
 
 
 def detect_overlapping_pairs(segments: list[SpeakerSegment], overlap_threshold: float) -> list[dict]:

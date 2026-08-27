@@ -115,6 +115,13 @@ class CliPhaseTest(unittest.TestCase):
 
             manifest = json.loads((output_root / "podcast_single_30s" / "manifest.timeline.json").read_text(encoding="utf-8"))
             self.assertGreater(len(manifest["segments"]), 0)
+            self.assertEqual(manifest["speaker_linking"]["audio"], "speaker_linking.json")
+            self.assertEqual(manifest["speaker_linking"]["strategy"], "native_global")
+            self.assertEqual(manifest["run_config"]["audio"], "config.resolved.json")
+            self.assertTrue((output_root / "podcast_single_30s" / "speaker_linking.json").exists())
+            self.assertTrue((output_root / "podcast_single_30s" / "config.resolved.json").exists())
+            resolved_config = json.loads((output_root / "podcast_single_30s" / "config.resolved.json").read_text(encoding="utf-8"))
+            self.assertEqual(resolved_config["components"]["diarization"]["model"], "pyannote/speech-separation-ami-1.0")
 
     def test_diarizen_backend_runs_in_dry_run_without_loading_model(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,4 +1,5 @@
 import argparse
+import copy
 import json
 import os
 import sys
@@ -10,7 +11,14 @@ from typing import TextIO
 
 from .asr import export_speaker_asr_audio, load_asr_runner, transcribe_asr_segments, write_transcript_json
 from .audio import iter_audio_files, load_mono, write_wav
-from .diarization import DiariZenDiarizer, PyannotePixitDiarizer, build_diarization_chunks, load_diarizer
+from .diarization import (
+    DiariZenDiarizer,
+    PyannotePixitDiarizer,
+    build_diarization_chunks,
+    build_speaker_linking_artifact,
+    load_diarizer,
+    write_speaker_linking_artifact,
+)
 from .labeling import label_transcripts, load_labeling_runner, resolve_state_dir, write_state_outputs
 from .model_options import add_model_option_arguments, apply_model_overrides
 from .music import apply_music_separation, load_music_separator
@@ -145,6 +153,40 @@ def format_elapsed(seconds: float) -> str:
 def load_config(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def write_resolved_config(
+    output_dir: Path,
+    config: dict,
+    *,
+    input_path: Path,
+    output_root: Path,
+    dry_run: bool,
+    sample_rate: int,
+    components: dict,
+) -> dict:
+    payload = {
+        "input_path": relative_path(input_path, Path.cwd()),
+        "output_root": relative_path(output_root, Path.cwd()),
+        "output_dir": relative_path(output_dir, Path.cwd()),
+        "dry_run": bool(dry_run),
+        "sample_rate": int(sample_rate),
+        "config": copy.deepcopy(config),
+        "components": components,
+    }
+    path = output_dir / "config.resolved.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"audio": relative_path(path, output_dir)}
+
+
+def _component_summary(section: dict, enabled: bool, runner=None, model_key: str = "model") -> dict:
+    return {
+        "enabled": bool(enabled),
+        "backend": str(section.get("backend", "")),
+        "model": str(section.get(model_key, section.get("model", ""))),
+        "requested_device": str(section.get("device", "")),
+        "resolved_device": str(getattr(runner, "resolved_device", section.get("device", ""))),
+    }
 
 
 def resolve_log_dir(config: dict, run_date: str, log_dir_arg: str = "") -> Path:
@@ -319,6 +361,14 @@ def process_one(
                 ),
             )
         segments = annotate_overlaps(segments, threshold=float(config.get("overlap", {}).get("threshold_seconds", 0.05)))
+        speaker_linking_payload = build_speaker_linking_artifact(
+            backend=str(diarization_config.get("backend", "sortformer")),
+            model=str(diarization_config.get("model", "nvidia/diar_sortformer_4spk-v1")),
+            segments=segments,
+            chunks=diarization_chunks,
+            linking=getattr(diarizer, "speaker_linking", {}),
+        )
+        speaker_linking_summary = write_speaker_linking_artifact(output_dir, speaker_linking_payload)
         sections.append(
             section(
                 "diarization",
@@ -328,6 +378,7 @@ def process_one(
                     kv("model", diarization_config.get("model", "nvidia/diar_sortformer_4spk-v1")),
                     kv("device", getattr(diarizer, "resolved_device", diarization_config.get("device", ""))),
                     kv("segments", len(segments)),
+                    kv("speaker_linking", speaker_linking_summary.get("audio", "")),
                 ],
             )
         )
@@ -376,6 +427,7 @@ def process_one(
             segments,
             separator,
             overlap_threshold=float(overlap_config.get("overlap_threshold_seconds", config.get("overlap", {}).get("threshold_seconds", 0.05))),
+            output_dir=output_dir,
             progress_callback=(
                 (lambda current, total, label: progress.item(audio_id, current_step, current, total, label))
                 if progress is not None
@@ -390,6 +442,8 @@ def process_one(
             kv("regions", len(overlap_result["overlap_regions"])),
             kv("enhanced_segments", len(overlap_result["segment_audio"])),
         ]
+        if overlap_result["overlap_regions"]:
+            overlap_attrs.append(kv("audio_dir", "overlap"))
         if overlap_warnings:
             overlap_attrs.append(kv("warning", overlap_warnings[0]))
         sections.append(section("overlap_separation", "PASS" if separator is not None else "SKIP", overlap_attrs))
@@ -449,6 +503,30 @@ def process_one(
             current_step = "manifest"
             if progress is not None:
                 progress.start(audio_id, current_step)
+            resolved_config = write_resolved_config(
+                output_dir,
+                config,
+                input_path=audio_path,
+                output_root=output_root,
+                dry_run=dry_run,
+                sample_rate=sample_rate,
+                components={
+                    "vad": _component_summary(vad_config, True, vad_runner),
+                    "diarization": _component_summary(diarization_config, True, diarizer),
+                    "music_separation": _component_summary(music_config, bool(music_config.get("enabled", False)), music_separator),
+                    "overlap_separation": _component_summary(
+                        overlap_config,
+                        bool(overlap_config.get("enabled", False)),
+                        separator,
+                        model_key="model_name",
+                    ),
+                    "asr": _component_summary(config.get("asr", {}), bool(config.get("asr", {}).get("enabled", False))),
+                    "state_labeling": _component_summary(
+                        config.get("state_labeling", {}),
+                        bool(config.get("state_labeling", {}).get("enabled", False)),
+                    ),
+                },
+            )
             manifest_path = write_manifest(
                 output_dir=output_dir,
                 audio_id=audio_id,
@@ -463,6 +541,8 @@ def process_one(
                 vad_audio=vad_audio,
                 asr_segments=asr_segments,
                 diarization_chunks=diarization_chunks,
+                speaker_linking=speaker_linking_summary,
+                run_config=resolved_config,
                 music_separation=music_summary,
                 overlap_separation={
                     "enabled": bool(separator is not None),
@@ -554,6 +634,31 @@ def process_one(
         current_step = "manifest"
         if progress is not None:
             progress.start(audio_id, current_step)
+        resolved_config = write_resolved_config(
+            output_dir,
+            config,
+            input_path=audio_path,
+            output_root=output_root,
+            dry_run=dry_run,
+            sample_rate=sample_rate,
+            components={
+                "vad": _component_summary(vad_config, True, vad_runner),
+                "diarization": _component_summary(diarization_config, True, diarizer),
+                "music_separation": _component_summary(music_config, bool(music_config.get("enabled", False)), music_separator),
+                "overlap_separation": _component_summary(
+                    overlap_config,
+                    bool(overlap_config.get("enabled", False)),
+                    separator,
+                    model_key="model_name",
+                ),
+                "asr": _component_summary(asr_config, bool(asr_config.get("enabled", False)), asr_runner),
+                "state_labeling": _component_summary(
+                    state_labeling_config,
+                    bool(state_labeling_config.get("enabled", False)),
+                    labeling_runner,
+                ),
+            },
+        )
         manifest_path = write_manifest(
             output_dir=output_dir,
             audio_id=audio_id,
@@ -568,6 +673,8 @@ def process_one(
             vad_audio=vad_audio,
             asr_segments=asr_segments,
             diarization_chunks=diarization_chunks,
+            speaker_linking=speaker_linking_summary,
+            run_config=resolved_config,
             music_separation=music_summary,
             overlap_separation={
                 "enabled": bool(separator is not None),

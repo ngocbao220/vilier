@@ -208,8 +208,8 @@ Example SepReformer config:
   "overlap_separation": {
     "enabled": true,
     "backend": "sepreformer",
-    "sepreformer_path": "SepReFormer",
-    "model_name": "SepReformer_Large_DM_WSJ0",
+    "sepreformer_path": "SepReformer",
+    "model_name": "SepReformer_Base_WSJ0",
     "device": "cpu",
     "overlap_threshold_seconds": 0.2
   }
@@ -283,6 +283,8 @@ outputs/<audio_id>/
   vad.txt
   transcript.json
   manifest.timeline.json
+  speaker_linking.json
+  config.resolved.json
   labels/vad.txt
   labels/speakers.txt
   labels/SPEAKER_00.txt
@@ -291,6 +293,9 @@ outputs/<audio_id>/
   music_cleaned.wav
   asr_audio/SPEAKER_00/audio_00001.wav
   asr_audio/SPEAKER_01/audio_00001.wav
+  overlap/overlap_00001_mixed.wav
+  overlap/overlap_00001_SPEAKER_00.wav
+  overlap/overlap_00001_SPEAKER_01.wav
   diarization_chunks/chunk_1.wav
   diarization_chunks/chunk_2.wav
   tracks/SPEAKER_00.wav
@@ -302,8 +307,10 @@ outputs/<audio_id>/
     index.json
 ```
 
-`manifest.timeline.json` includes `vad_segments`, VAD utterance audio paths, `music_separation`, `asr_segments`, diarization chunk paths with source-time mapping, speaker segments, track paths, and Audacity label file paths.
+`manifest.timeline.json` includes `vad_segments`, VAD utterance audio paths, `music_separation`, `asr_segments`, diarization chunk paths with source-time mapping, `speaker_linking`, `run_config`, speaker segments, track paths, and Audacity label file paths.
 It also includes `transcript`, with one speaker-tagged transcript record per speaker-channel ASR segment when `asr.enabled` is `true`, plus state label fields when `state_labeling.enabled` is `true`.
+`speaker_linking.json` records how per-chunk or model-native speaker ids became final `SPEAKER_*` ids. Sortformer multi-chunk runs use ECAPA speaker embeddings and cosine clustering when available; full-audio backends such as pyannote and DiariZen record `native_global` speaker ids emitted by the backend.
+`config.resolved.json` records the input/output paths, dry-run flag, sample rate, effective config, and resolved component backends/models/devices for the run.
 `state_labeling` in the manifest summarizes the configured labels, Qwen model, counts, and `outputs/<audio_id>/state/index.json`.
 `transcript.json` contains the same transcript records as a standalone inspectable file.
 `vad.txt` is a tab-separated view of the same VAD intervals: `start_time<TAB>end_time<TAB>label`.
@@ -312,7 +319,7 @@ It also includes `transcript`, with one speaker-tagged transcript record per spe
 `asr_audio/SPEAKER_*/*.wav` contains speech segments detected on each exported speaker track. These files are the default ASR and Qwen labeling input.
 `diarization_chunks/chunk_*.wav` contains concatenated VAD utterances for Sortformer compatibility. PixIT diarization runs on `audio.standardized.wav` directly.
 When `music_separation.enabled` is `true`, Demucs runs before SepReformer so overlap separation receives the vocal-cleaned waveform, following the Sommelier ordering.
-When `overlap_separation.enabled` is `true`, overlapping speaker regions are separated before speaker tracks are exported. This follows the Sommelier SepReformer flow: detect overlapping diarization pairs, separate only the mixed overlap region, match separated source volume to each speaker's non-overlap RMS, then reconstruct enhanced per-speaker audio for track export.
+When `overlap_separation.enabled` is `true`, overlapping speaker regions are separated before speaker tracks are exported. This follows the Sommelier SepReformer flow: detect overlapping diarization pairs, write the mixed and separated overlap snippets under `overlap/`, separate only the mixed overlap region, match separated source volume to each speaker's non-overlap RMS, then reconstruct enhanced per-speaker audio for track export.
 
 ## Audacity Import
 
