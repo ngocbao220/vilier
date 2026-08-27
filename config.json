@@ -42,7 +42,10 @@
     "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "api_key_env": "DASHSCOPE_API_KEY",
     "state_dir": "state",
-    "labels": ["complete", "incomplete"]
+    "labels": [
+      "complete",
+      "incomplete"
+    ]
   },
   "export": {
     "write_segment_wavs": false,
@@ -62,7 +65,7 @@
     "residual_subtract": 0.5
   },
   "overlap_separation": {
-    "enabled": false,
+    "enabled": true,
     "backend": "sepreformer",
     "sepreformer_path": "SepReformer",
     "model_name": "SepReformer_Base_WSJ0",
