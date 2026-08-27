@@ -29,7 +29,7 @@ vilier/
 
 ## Run A Smoke Test Without Heavy Models
 
-Dry-run mode uses deterministic adapters and does not load Sortformer, PixIT, SpeechBrain, SepReformer, PhoWhisper, or Qwen.
+Dry-run mode uses deterministic adapters and does not load Sortformer, PixIT, ClearVoice, SpeechBrain, SepReformer, PhoWhisper, or Qwen.
 It also writes placeholder ASR text, so use it only to test file flow and timeline contracts.
 
 ```bash
@@ -66,6 +66,7 @@ python -m pip install -r requirements/diarizen.txt
 python -m pip install -r requirements/demucs.txt
 python -m pip install -r requirements/asr.txt
 python -m pip install -r requirements/sepreformer.txt
+python -m pip install -r requirements/clearvoice-separation.txt
 python -m pip install -r requirements/speechbrain-separation.txt
 ```
 
@@ -126,7 +127,7 @@ Available option groups are `vad`, `diarization`, `music-separation`, `overlap-s
 | pyannote Community | `diarization.backend=pyannote`, `diarization.model=pyannote/speaker-diarization-community-1` | Default config. Install `requirements/pyannote-community.txt`, accept the Hugging Face conditions for the pyannote model, and set the token env configured by `diarization.token_env`, usually `HUGGINGFACE_TOKEN`. |
 | pyannote 3.1 | `diarization.backend=pyannote`, `diarization.model=pyannote/speaker-diarization-3.1` | Install `requirements/pyannote-3.1.txt` in a separate environment from pyannote Community and DiariZen. Accept the Hugging Face conditions for the pyannote model and set `HUGGINGFACE_TOKEN` or the env named by `diarization.token_env`. |
 | pyannote PixIT | `diarization.backend=pixit` or `pyannote_pixit`, `diarization.model=pyannote/speech-separation-ami-1.0` | Runs on `audio.standardized.wav` directly. Install `requirements/pyannote-pixit.txt` in a separate environment from pyannote Community and DiariZen. `diarization.device=auto` uses CUDA if available, then Apple MPS, then CPU. Set `diarization.device=mps` to force Apple GPU on macOS; unsupported MPS ops can still fall back to CPU through PyTorch. |
-| DiariZen | `diarization.backend=diarizen`, `diarization.model=BUT-FIT/diarizen-wavlm-large-s80-md` | Runs on `audio.standardized.wav` directly through `diarizen.pipelines.inference.DiariZenPipeline`. Install `requirements/diarizen.txt` in its own environment before using this backend. Upstream releases the model weights under CC BY-NC 4.0, so treat them as research/non-commercial weights. |
+| DiariZen | `diarization.backend=diarizen`, `diarization.model=BUT-FIT/diarizen-wavlm-large-s80-md` | Runs on `audio.standardized.wav` directly through `diarizen.pipelines.inference.DiariZenPipeline`. Install `requirements/diarizen.txt` in its own environment before using this backend; this profile installs both DiariZen and its vendored `pyannote-audio` subdirectory. Upstream releases the model weights under CC BY-NC 4.0, so treat them as research/non-commercial weights. |
 
 Example Sortformer config:
 
@@ -178,6 +179,12 @@ Example DiariZen config:
 }
 ```
 
+If DiariZen fails with `KeyError: 'pyannote.audio'`, recreate the backend in a
+clean environment and install only `requirements/diarizen.txt`. Do not layer it
+on top of `requirements/pyannote-community.txt`, `requirements/pyannote-3.1.txt`,
+or `requirements/pyannote-pixit.txt`; DiariZen expects its own vendored
+`pyannote-audio` install and the PyTorch 2.1.1 stack used by upstream.
+
 ### Music Separation
 
 | Backend | Config values | Notes |
@@ -191,6 +198,7 @@ Overlap separation is optional. If `overlap_separation.enabled=false`, overlappi
 
 | Backend | Config values | Notes |
 |---------|---------------|-------|
+| ClearVoice MossFormer2 | `overlap_separation.backend=clearvoice`, `overlap_separation.model_name=alibabasglab/MossFormer2_SS_16K` | Downloads and runs the 16 kHz ClearVoice speech-separation model through `clearvoice.ClearVoice`. Install `requirements/clearvoice-separation.txt`. You can also use `overlap_separation.backend=mossformer2` as an alias. |
 | SpeechBrain SepFormer | `overlap_separation.backend=speechbrain`, `overlap_separation.model_name=speechbrain/sepformer-wsj02mix` | Downloads and runs the SpeechBrain SepFormer 2-speaker separation model through `speechbrain.inference.separation.SepformerSeparation`. Install `requirements/speechbrain-separation.txt`. |
 | SepReformer | `overlap_separation.backend=sepreformer`, `overlap_separation.model_name=<model_dir>` | `model_name` is the directory under `SepReFormer/models`. If the checkpoint is not present locally, set `overlap_separation.checkpoint_repo` to a Hugging Face repo such as `niobures/SepReformer`; the pipeline downloads `.pt`/`.pth` checkpoint files when overlap separation is enabled. |
 
@@ -210,6 +218,20 @@ Model directories present in this checkout:
 | Large | `SepReformer_Large_DM_WHAMR` | WHAMR |
 
 The three Large variants are selected only by changing `overlap_separation.model_name`; no code change is needed as long as the matching config and checkpoint exist under that model directory.
+
+Example ClearVoice MossFormer2 config:
+
+```json
+{
+  "overlap_separation": {
+    "enabled": true,
+    "backend": "clearvoice",
+    "model_name": "alibabasglab/MossFormer2_SS_16K",
+    "device": "auto",
+    "overlap_threshold_seconds": 0.2
+  }
+}
+```
 
 Example SepReformer config:
 
@@ -365,6 +387,6 @@ All label files use Audacity's tab-separated format: `start_time<TAB>end_time<TA
 Segment WAV export is disabled by default for faster Audacity-oriented generation. Set `export.write_segment_wavs` to `true` in `config.json` when you need individual files under `segments/SPEAKER_*`.
 Matplotlib visualization export is also disabled by default. Set `export.write_visualizations` to `true` when you need PNG files under `visualization/`.
 
-Set `overlap_separation.enabled` to `false` to skip overlap separation. With `backend=speechbrain`, `model_name` is the SpeechBrain source such as `speechbrain/sepformer-wsj02mix`; with `backend=sepreformer`, point `overlap_separation.sepreformer_path` to the local `SepReFormer` checkout and choose a `model_name` whose checkpoint exists.
+Set `overlap_separation.enabled` to `false` to skip overlap separation. With `backend=clearvoice`, `model_name` can be the Hugging Face id `alibabasglab/MossFormer2_SS_16K` or the ClearVoice model name `MossFormer2_SS_16K`; with `backend=speechbrain`, `model_name` is the SpeechBrain source such as `speechbrain/sepformer-wsj02mix`; with `backend=sepreformer`, point `overlap_separation.sepreformer_path` to the local `SepReFormer` checkout and choose a `model_name` whose checkpoint exists.
 
 `tracks/SPEAKER_*.wav` are full-duration files. Playing them in parallel reconstructs the speaker timing from the original conversation.

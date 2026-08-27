@@ -24,9 +24,9 @@ class ModelOptionsTest(unittest.TestCase):
                 "--asr-device",
                 "cuda",
                 "--overlap-separation-model",
-                "speechbrain/sepformer-wsj02mix",
+                "alibabasglab/MossFormer2_SS_16K",
                 "--overlap-separation-backend",
-                "speechbrain",
+                "clearvoice",
             ]
         )
         config = {
@@ -43,8 +43,8 @@ class ModelOptionsTest(unittest.TestCase):
         self.assertTrue(updated["asr"]["enabled"])
         self.assertEqual(updated["asr"]["model"], "vinai/PhoWhisper-large")
         self.assertEqual(updated["asr"]["device"], "cuda")
-        self.assertEqual(updated["overlap_separation"]["backend"], "speechbrain")
-        self.assertEqual(updated["overlap_separation"]["model_name"], "speechbrain/sepformer-wsj02mix")
+        self.assertEqual(updated["overlap_separation"]["backend"], "clearvoice")
+        self.assertEqual(updated["overlap_separation"]["model_name"], "alibabasglab/MossFormer2_SS_16K")
         self.assertEqual(config["diarization"]["backend"], "pyannote")
 
     def test_disable_optional_phase(self):

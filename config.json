@@ -1,6 +1,6 @@
 {
   "entrypoint": {
-    "input_path": "inputs/real.wav",
+    "input_path": "inputs/samples/easy_1.wav",
     "output_path": "outputs",
     "sample_rate": 16000
   },
@@ -19,6 +19,29 @@
     "merge_gap_seconds": 0.2
   },
   "diarization": {
+    "_model_replacement_comment": "Change backend/model to replace diarization model. Examples: pyannote + pyannote/speaker-diarization-3.1, sortformer + nvidia/diar_sortformer_4spk-v1, diarizen + BUT-FIT/diarizen-wavlm-large-s80-md.",
+    "_model_replacement_examples": [
+      {
+        "backend": "pyannote",
+        "model": "pyannote/speaker-diarization-community-1",
+        "requirements": "requirements/pyannote-community.txt"
+      },
+      {
+        "backend": "pyannote",
+        "model": "pyannote/speaker-diarization-3.1",
+        "requirements": "requirements/pyannote-3.1.txt"
+      },
+      {
+        "backend": "sortformer",
+        "model": "nvidia/diar_sortformer_4spk-v1",
+        "requirements": "requirements/sortformer.txt"
+      },
+      {
+        "backend": "diarizen",
+        "model": "BUT-FIT/diarizen-wavlm-large-s80-md",
+        "requirements": "requirements/diarizen.txt"
+      }
+    ],
     "backend": "pyannote",
     "model": "pyannote/speaker-diarization-community-1",
     "token_env": "HUGGINGFACE_TOKEN",
@@ -28,6 +51,7 @@
     "max_chunk_seconds": 180.0
   },
   "asr": {
+    "_model_replacement_comment": "Change model to replace ASR model. Keep backend=phowhisper_local for local PhoWhisper-compatible Transformers models.",
     "enabled": false,
     "backend": "phowhisper_local",
     "model": "vinai/PhoWhisper-large",
@@ -36,6 +60,7 @@
     "chunk_length_seconds": 30.0
   },
   "state_labeling": {
+    "_model_replacement_comment": "Change model to replace the Qwen/OpenAI-compatible state-labeling model.",
     "enabled": false,
     "backend": "qwen",
     "model": "qwen3.8-max",
@@ -55,6 +80,7 @@
     "threshold_seconds": 0.05
   },
   "music_separation": {
+    "_model_replacement_comment": "Change model to replace Demucs music separation model, for example htdemucs or another model supported by demucs.pretrained.get_model.",
     "enabled": false,
     "backend": "demucs",
     "model": "htdemucs",
@@ -65,9 +91,27 @@
     "residual_subtract": 0.5
   },
   "overlap_separation": {
+    "_model_replacement_comment": "Change backend/model_name to replace overlap speech separation model. Examples: clearvoice + alibabasglab/MossFormer2_SS_16K, speechbrain + speechbrain/sepformer-wsj02mix, sepreformer + SepReformer_Base_WSJ0.",
+    "_model_replacement_examples": [
+      {
+        "backend": "clearvoice",
+        "model_name": "alibabasglab/MossFormer2_SS_16K",
+        "requirements": "requirements/clearvoice-separation.txt"
+      },
+      {
+        "backend": "speechbrain",
+        "model_name": "speechbrain/sepformer-wsj02mix",
+        "requirements": "requirements/speechbrain-separation.txt"
+      },
+      {
+        "backend": "sepreformer",
+        "model_name": "SepReformer_Base_WSJ0",
+        "requirements": "requirements/sepreformer.txt"
+      }
+    ],
     "enabled": true,
-    "backend": "speechbrain",
-    "model_name": "speechbrain/sepformer-wsj02mix",
+    "backend": "clearvoice",
+    "model_name": "alibabasglab/MossFormer2_SS_16K",
     "device": "auto",
     "overlap_threshold_seconds": 0.2
   }

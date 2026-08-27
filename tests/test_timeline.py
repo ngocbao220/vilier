@@ -32,6 +32,8 @@ from pipeline.diarization import (
 )
 from pipeline.music import _suppress_accompaniment, apply_music_separation, load_music_separator
 from pipeline.overlap_separation import (
+    _clearvoice_model_name,
+    _clearvoice_sources,
     _find_checkpoint_dir,
     _find_checkpoint_files,
     _import_sepreformer_model_class,
@@ -596,7 +598,7 @@ class TimelineTest(unittest.TestCase):
                 "0.000\t1.500\tSPEAKER_00\n4.000\t5.000\tSPEAKER_00\n",
             )
 
-    def test_build_diarization_chunks_concatenates_vad_audio_under_limit(self):
+    def test_build_diarization_chunks_groups_ordered_vad_by_source_time_window(self):
         sample_rate = 10
         waveform = np.arange(sample_rate * 10, dtype=np.float32) / 100.0
         vad_segments = [
@@ -607,16 +609,39 @@ class TimelineTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
             chunks = build_diarization_chunks(waveform, sample_rate, vad_segments, out, max_chunk_seconds=3.0)
-            self.assertEqual(len(chunks), 2)
+            self.assertEqual(len(chunks), 3)
             self.assertEqual(chunks[0]["audio"], "diarization_chunks/chunk_1.wav")
             self.assertLess(chunks[0]["duration"], 3.0)
-            self.assertLess(chunks[1]["duration"], 3.0)
             self.assertEqual(chunks[0]["mapping"][0]["source_start"], 1.0)
             self.assertEqual(chunks[0]["mapping"][0]["chunk_start"], 0.0)
-            self.assertEqual(chunks[0]["mapping"][1]["source_start"], 3.0)
-            self.assertEqual(chunks[0]["mapping"][1]["chunk_start"], 1.0)
+            self.assertEqual(chunks[1]["mapping"][0]["source_start"], 3.0)
+            self.assertEqual(chunks[1]["mapping"][0]["source_end"], 5.0)
+            self.assertEqual(chunks[1]["mapping"][0]["chunk_start"], 0.0)
+            self.assertEqual(chunks[2]["mapping"][0]["source_start"], 7.0)
             self.assertTrue((out / "diarization_chunks" / "chunk_1.wav").exists())
             self.assertTrue((out / "diarization_chunks" / "chunk_2.wav").exists())
+            self.assertTrue((out / "diarization_chunks" / "chunk_3.wav").exists())
+
+    def test_build_diarization_chunks_preserves_silence_between_vad_utterances(self):
+        sample_rate = 10
+        waveform = np.ones(sample_rate * 5, dtype=np.float32)
+        vad_segments = [
+            {"id": "vad_00000", "start": 1.0, "end": 2.0},
+            {"id": "vad_00001", "start": 3.0, "end": 4.0},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            chunks = build_diarization_chunks(waveform, sample_rate, vad_segments, out, max_chunk_seconds=5.0)
+            audio, sr = sf.read(out / chunks[0]["audio"], dtype="float32")
+
+            self.assertEqual(sr, sample_rate)
+            self.assertEqual(len(chunks), 1)
+            self.assertEqual(chunks[0]["duration"], 3.0)
+            self.assertEqual(chunks[0]["mapping"][0]["chunk_start"], 0.0)
+            self.assertEqual(chunks[0]["mapping"][1]["chunk_start"], 2.0)
+            np.testing.assert_allclose(audio[:10], 1.0, atol=1e-4)
+            np.testing.assert_allclose(audio[10:20], 0.0, atol=1e-4)
+            np.testing.assert_allclose(audio[20:30], 1.0, atol=1e-4)
 
     def test_pyannote_annotation_to_segments_normalizes_speakers(self):
         class Turn:
@@ -741,6 +766,37 @@ class TimelineTest(unittest.TestCase):
             DiariZenDiarizer({"model": "BUT-FIT/diarizen-wavlm-large-s80-md"})
 
         self.assertEqual(Pipeline.calls, [(("BUT-FIT/diarizen-wavlm-large-s80-md",), {})])
+
+    def test_diarizen_diarizer_retries_from_pretrained_after_pyannote_audio_key_error(self):
+        class Pipeline:
+            calls = []
+
+            @classmethod
+            def from_pretrained(cls, *args, **kwargs):
+                cls.calls.append((args, kwargs))
+                if len(cls.calls) == 1:
+                    sys.modules["pyannote.audio"] = types.ModuleType("pyannote.audio")
+                    raise KeyError("pyannote.audio")
+                return cls()
+
+        inference = types.ModuleType("diarizen.pipelines.inference")
+        inference.DiariZenPipeline = Pipeline
+        pipelines = types.ModuleType("diarizen.pipelines")
+        diarizen = types.ModuleType("diarizen")
+
+        with mock.patch.dict(
+            sys.modules,
+            {
+                "diarizen": diarizen,
+                "diarizen.pipelines": pipelines,
+                "diarizen.pipelines.inference": inference,
+            },
+        ):
+            diarizer = DiariZenDiarizer({"model": "BUT-FIT/test-model"})
+
+        self.assertIsInstance(diarizer.pipeline, Pipeline)
+        self.assertEqual(Pipeline.calls, [(("BUT-FIT/test-model",), {}), (("BUT-FIT/test-model",), {})])
+        self.assertNotIn("pyannote.audio", sys.modules)
 
     def test_pyannote_speaker_diarization_compat_filters_plda_kwarg(self):
         calls = []
@@ -1192,6 +1248,52 @@ class TimelineTest(unittest.TestCase):
         self.assertEqual(calls[0]["source"], "speechbrain/sepformer-wsj02mix")
         self.assertEqual(calls[0]["savedir"], "pretrained_models/sepformer-wsj02mix")
         self.assertEqual(calls[0]["run_opts"], {"device": "cpu"})
+
+    def test_load_overlap_separator_supports_clearvoice_mossformer2_backend(self):
+        calls = []
+
+        class ClearVoice:
+            def __init__(self, **kwargs):
+                calls.append(kwargs)
+
+            def __call__(self, audio, online_write):
+                self.audio = audio
+                self.online_write = online_write
+                return np.stack([audio * 0.8, audio * 0.2], axis=0)
+
+        fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+        clearvoice = types.ModuleType("clearvoice")
+        clearvoice.ClearVoice = ClearVoice
+
+        with mock.patch.dict(sys.modules, {"torch": fake_torch, "clearvoice": clearvoice}):
+            separator = load_overlap_separator(
+                {
+                    "enabled": True,
+                    "backend": "clearvoice",
+                    "model_name": "alibabasglab/MossFormer2_SS_16K",
+                    "device": "auto",
+                }
+            )
+            src1, src2 = separator.separate(np.ones(8, dtype=np.float32), sample_rate=16000)
+
+        self.assertEqual(separator.resolved_device, "cpu")
+        self.assertEqual(separator.model_name, "alibabasglab/MossFormer2_SS_16K")
+        self.assertEqual(separator.clearvoice_model_name, "MossFormer2_SS_16K")
+        self.assertEqual(calls, [{"task": "speech_separation", "model_names": ["MossFormer2_SS_16K"]}])
+        np.testing.assert_allclose(src1, 0.8, atol=1e-6)
+        np.testing.assert_allclose(src2, 0.2, atol=1e-6)
+
+    def test_clearvoice_model_name_accepts_hf_id_or_clearvoice_name(self):
+        self.assertEqual(_clearvoice_model_name("alibabasglab/MossFormer2_SS_16K"), "MossFormer2_SS_16K")
+        self.assertEqual(_clearvoice_model_name("MossFormer2_SS_16K"), "MossFormer2_SS_16K")
+
+    def test_clearvoice_sources_requires_two_speakers(self):
+        src1, src2 = _clearvoice_sources(np.zeros((2, 1, 4), dtype=np.float32))
+
+        self.assertEqual(src1.shape, (4,))
+        self.assertEqual(src2.shape, (4,))
+        with self.assertRaisesRegex(ValueError, "Expected ClearVoice speech_separation output"):
+            _clearvoice_sources(np.zeros((1, 4), dtype=np.float32))
 
     def test_resolve_sepreformer_path_uses_project_local_checkout(self):
         resolved = _resolve_sepreformer_path("SepReformer")

@@ -430,7 +430,22 @@ class DiariZenDiarizer:
             kwargs["cache_dir"] = self.cache_dir
         if self.rttm_out_dir:
             kwargs["rttm_out_dir"] = self.rttm_out_dir
-        return DiariZenPipeline.from_pretrained(self.model_name, **kwargs)
+        try:
+            return DiariZenPipeline.from_pretrained(self.model_name, **kwargs)
+        except KeyError as exc:
+            if exc.args != ("pyannote.audio",):
+                raise
+            _clear_imported_modules(("pyannote",))
+            try:
+                return DiariZenPipeline.from_pretrained(self.model_name, **kwargs)
+            except KeyError as retry_exc:
+                if retry_exc.args != ("pyannote.audio",):
+                    raise
+                raise RuntimeError(
+                    "DiariZen failed while loading pyannote.audio. Use a clean environment installed only with "
+                    "requirements/diarizen.txt, then rerun diarization.backend=diarizen. Do not mix this "
+                    "environment with requirements/pyannote-community.txt or requirements/pyannote-pixit.txt."
+                ) from retry_exc
 
     def _dry_run_segments(self, vad_segments: list[dict]) -> list[SpeakerSegment]:
         return SortformerDiarizer(self.config, dry_run=True)._dry_run_segments(vad_segments)
@@ -785,9 +800,11 @@ def build_diarization_chunks(
     current_audio = []
     current_mapping = []
     current_samples = 0
+    current_source_start = None
+    current_source_end = None
 
     def flush() -> None:
-        nonlocal current_audio, current_mapping, current_samples
+        nonlocal current_audio, current_mapping, current_samples, current_source_start, current_source_end
         if not current_audio:
             return
         chunk_idx = len(chunks) + 1
@@ -806,9 +823,12 @@ def build_diarization_chunks(
         current_audio = []
         current_mapping = []
         current_samples = 0
+        current_source_start = None
+        current_source_end = None
 
     total = len(vad_segments)
-    for vad_idx, vad in enumerate(vad_segments, start=1):
+    ordered_vad_segments = sorted(vad_segments, key=lambda item: (float(item["start"]), float(item["end"]), str(item.get("id", ""))))
+    for vad_idx, vad in enumerate(ordered_vad_segments, start=1):
         if progress_callback is not None:
             progress_callback(vad_idx, total, str(vad.get("id", f"vad_{vad_idx - 1:05d}")))
         source_start = float(vad["start"])
@@ -816,17 +836,35 @@ def build_diarization_chunks(
         utterance = slice_waveform(waveform, sample_rate, source_start, source_end)
         offset = 0
         while offset < len(utterance):
+            piece_source_start = source_start + offset / sample_rate
+            if current_source_start is not None and source_end - current_source_start > max_chunk_seconds:
+                flush()
             if current_samples >= max_chunk_samples:
                 flush()
+            if current_source_start is None:
+                current_source_start = piece_source_start
+                current_source_end = piece_source_start
             available = max_chunk_samples - current_samples
             if available <= 0:
                 flush()
+                current_source_start = piece_source_start
+                current_source_end = piece_source_start
                 available = max_chunk_samples
+            if current_source_end is not None and piece_source_start > current_source_end:
+                gap_samples = min(int(round((piece_source_start - current_source_end) * sample_rate)), available)
+                if gap_samples > 0:
+                    current_audio.append(np.zeros(gap_samples, dtype=np.float32))
+                    current_samples += gap_samples
+                    available -= gap_samples
+                if available <= 0:
+                    flush()
+                    current_source_start = piece_source_start
+                    current_source_end = piece_source_start
+                    available = max_chunk_samples
             take = min(len(utterance) - offset, available)
             piece = utterance[offset : offset + take]
             chunk_start = current_samples / sample_rate
             chunk_end = (current_samples + take) / sample_rate
-            piece_source_start = source_start + offset / sample_rate
             piece_source_end = source_start + (offset + take) / sample_rate
             current_audio.append(piece)
             current_mapping.append(
@@ -839,6 +877,7 @@ def build_diarization_chunks(
                 }
             )
             current_samples += take
+            current_source_end = piece_source_end
             offset += take
             if current_samples >= max_chunk_samples:
                 flush()

@@ -1,5 +1,13 @@
 -r vad.txt
 
 # Keep DiariZen in its own environment; it brings its own pyannote stack.
+# Upstream DiariZen requires its vendored pyannote-audio checkout, not the
+# pyannote-community or pyannote-pixit profiles used by other backends.
 setuptools<81
+torch==2.1.1
+torchaudio==2.1.1
+torchvision==0.16.1
+numpy==1.26.4
+accelerate==1.6.0
 git+https://github.com/BUTSpeechFIT/DiariZen.git
+pyannote.audio[dev,testing] @ git+https://github.com/BUTSpeechFIT/DiariZen.git#subdirectory=pyannote-audio

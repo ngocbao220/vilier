@@ -17,12 +17,12 @@ class ColabNotebookTest(unittest.TestCase):
         self.assertIn('os.environ["OUTPUT_PATH"] = str(output_dir)', source)
         self.assertIn('"pyannote/speaker-diarization-3.1"', source)
         self.assertIn('PYANNOTE_PROFILE = "pyannote-3.1"', source)
-        self.assertIn("requirements/speechbrain-separation.txt", source)
-        self.assertIn('OVERLAP_SEPARATION_BACKEND = "speechbrain"', source)
-        self.assertIn('OVERLAP_SEPARATION_MODEL = "speechbrain/sepformer-wsj02mix"', source)
+        self.assertIn("requirements/clearvoice-separation.txt", source)
+        self.assertIn('OVERLAP_SEPARATION_BACKEND = "clearvoice"', source)
+        self.assertIn('OVERLAP_SEPARATION_MODEL = "alibabasglab/MossFormer2_SS_16K"', source)
         self.assertIn('config["overlap_separation"]["backend"] = OVERLAP_SEPARATION_BACKEND', source)
         self.assertIn(
-            "!bash run.sh --enable-overlap-separation --overlap-separation-backend speechbrain --overlap-separation-model speechbrain/sepformer-wsj02mix",
+            "!bash run.sh --enable-overlap-separation --overlap-separation-backend clearvoice --overlap-separation-model alibabasglab/MossFormer2_SS_16K",
             source,
         )
         self.assertNotIn("/kaggle/input", source)

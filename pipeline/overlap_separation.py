@@ -148,6 +148,16 @@ def load_overlap_separator(config: dict, dry_run: bool = False, warnings: list[s
             if warnings is not None:
                 warnings.append(str(exc))
             return None
+    elif backend in {"clearvoice", "mossformer2"}:
+        try:
+            return ClearVoiceSeparator(
+                config.get("model_name", "alibabasglab/MossFormer2_SS_16K"),
+                config.get("device", "cpu"),
+            )
+        except Exception as exc:
+            if warnings is not None:
+                warnings.append(str(exc))
+            return None
     else:
         raise ValueError(f"Unsupported overlap separation backend: {backend}")
 
@@ -157,6 +167,36 @@ class NoOpSeparator:
 
     def separate(self, audio_segment: np.ndarray, sample_rate: int):
         return audio_segment, audio_segment
+
+
+class ClearVoiceSeparator:
+    def __init__(self, model_name: str = "alibabasglab/MossFormer2_SS_16K", device: str = "cpu"):
+        import torch
+        from clearvoice import ClearVoice
+
+        self.model_name = str(model_name)
+        self.clearvoice_model_name = _clearvoice_model_name(self.model_name)
+        self.resolved_device = resolve_auto_device(torch, device, warn_label="overlap_separation.device")
+        self.model = ClearVoice(task="speech_separation", model_names=[self.clearvoice_model_name])
+
+    def separate(self, audio_segment: np.ndarray, sample_rate: int):
+        audio_16k = np.asarray(audio_segment, dtype=np.float32)
+        if sample_rate != 16000:
+            import librosa
+
+            audio_16k = librosa.resample(audio_16k, orig_sr=sample_rate, target_sr=16000)
+
+        model_input = audio_16k.reshape(1, -1).astype(np.float32, copy=False)
+        output = np.asarray(self.model(model_input, False), dtype=np.float32)
+        src1, src2 = _clearvoice_sources(output)
+
+        if sample_rate != 16000:
+            import librosa
+
+            src1 = librosa.resample(src1, orig_sr=16000, target_sr=sample_rate)
+            src2 = librosa.resample(src2, orig_sr=16000, target_sr=sample_rate)
+
+        return _match_length(src1, len(audio_segment)), _match_length(src2, len(audio_segment))
 
 
 class SpeechBrainSeparator:
@@ -193,6 +233,21 @@ class SpeechBrainSeparator:
             src2 = librosa.resample(src2, orig_sr=8000, target_sr=sample_rate)
 
         return _match_length(src1, len(audio_segment)), _match_length(src2, len(audio_segment))
+
+
+def _clearvoice_model_name(model_name: str) -> str:
+    name = str(model_name).strip().rstrip("/")
+    if not name:
+        return "MossFormer2_SS_16K"
+    return name.split("/")[-1]
+
+
+def _clearvoice_sources(output: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    if output.ndim == 3 and output.shape[0] >= 2:
+        return output[0, 0, :], output[1, 0, :]
+    if output.ndim == 2 and output.shape[0] >= 2:
+        return output[0, :], output[1, :]
+    raise ValueError(f"Expected ClearVoice speech_separation output shaped [spk,batch,length], got {output.shape}")
 
 
 class SepReformerSeparator:
