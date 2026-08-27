@@ -31,7 +31,13 @@ from pipeline.diarization import (
     write_speaker_linking_artifact,
 )
 from pipeline.music import _suppress_accompaniment, apply_music_separation, load_music_separator
-from pipeline.overlap_separation import _find_checkpoint_dir, _import_sepreformer_model_class, _resolve_sepreformer_path, apply_overlap_separation
+from pipeline.overlap_separation import (
+    _find_checkpoint_dir,
+    _find_checkpoint_files,
+    _import_sepreformer_model_class,
+    _resolve_sepreformer_path,
+    apply_overlap_separation,
+)
 from pipeline.schema import SpeakerSegment
 from pipeline.timeline import annotate_overlaps, export_audacity_labels, export_segments_and_tracks, write_manifest
 from pipeline.vad import SileroVadRunner, _TorchHubSileroVad, cleanup_intervals, export_vad_audio, write_vad_txt
@@ -1173,6 +1179,34 @@ class TimelineTest(unittest.TestCase):
             (checkpoint_dir / "model.pth").write_bytes(b"placeholder")
 
             self.assertEqual(_find_checkpoint_dir(root, "SepReformer_Large_DM_WSJ0"), checkpoint_dir)
+
+    def test_find_checkpoint_files_downloads_from_hf_when_local_checkpoint_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "models" / "SepReformer_Base_WSJ0" / "log").mkdir(parents=True)
+            downloaded = root / "downloaded"
+            checkpoint = downloaded / "models" / "SepReformer_Base_WSJ0" / "log" / "scratch_weights" / "epoch.0180.pth"
+            checkpoint.parent.mkdir(parents=True)
+            checkpoint.write_bytes(b"placeholder")
+            calls = []
+
+            def snapshot_download(**kwargs):
+                calls.append(kwargs)
+                return str(downloaded)
+
+            huggingface_hub = types.ModuleType("huggingface_hub")
+            huggingface_hub.snapshot_download = snapshot_download
+
+            with mock.patch.dict(sys.modules, {"huggingface_hub": huggingface_hub}):
+                checkpoints = _find_checkpoint_files(
+                    root,
+                    "SepReformer_Base_WSJ0",
+                    checkpoint_repo="niobures/SepReformer",
+                )
+
+            self.assertEqual(checkpoints, [checkpoint])
+            self.assertEqual(calls[0]["repo_id"], "niobures/SepReformer")
+            self.assertIn("**/*.pth", calls[0]["allow_patterns"])
 
     def test_sepreformer_import_ignores_existing_models_and_utils_packages(self):
         with tempfile.TemporaryDirectory() as tmp:

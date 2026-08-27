@@ -132,6 +132,8 @@ def load_overlap_separator(config: dict, dry_run: bool = False, warnings: list[s
             _resolve_sepreformer_path(config.get("sepreformer_path", "SepReformer")),
             config.get("device", "cpu"),
             config.get("model_name", "SepReformer_Base_WSJ0"),
+            config.get("checkpoint_repo", ""),
+            config.get("checkpoint_revision", ""),
         )
     except Exception as exc:
         if warnings is not None:
@@ -147,12 +149,21 @@ class NoOpSeparator:
 
 
 class SepReformerSeparator:
-    def __init__(self, sepreformer_path: Path, device: str, model_name: str = "SepReformer_Base_WSJ0"):
+    def __init__(
+        self,
+        sepreformer_path: Path,
+        device: str,
+        model_name: str = "SepReformer_Base_WSJ0",
+        checkpoint_repo: str = "",
+        checkpoint_revision: str = "",
+    ):
         import torch
         import yaml
 
         self.sepreformer_path = sepreformer_path.expanduser().resolve()
         self.model_name = _validate_model_name(model_name)
+        self.checkpoint_repo = checkpoint_repo
+        self.checkpoint_revision = checkpoint_revision
         self.resolved_device = resolve_auto_device(torch, device, warn_label="overlap_separation.device")
         self.device = torch.device(self.resolved_device)
         if not self.sepreformer_path.exists():
@@ -168,12 +179,15 @@ class SepReformerSeparator:
             config_path = self.sepreformer_path / "models" / self.model_name / "configs.yaml"
             with config_path.open("r", encoding="utf-8") as handle:
                 self.config = yaml.safe_load(handle)["config"]
-            checkpoint_dir = _find_checkpoint_dir(self.sepreformer_path, self.model_name)
-            checkpoints = sorted(path for path in checkpoint_dir.iterdir() if path.suffix in {".pt", ".pth"})
-            if not checkpoints:
-                raise FileNotFoundError(f"No SepReformer checkpoint found in {checkpoint_dir}")
+            checkpoints = _find_checkpoint_files(
+                self.sepreformer_path,
+                self.model_name,
+                checkpoint_repo=self.checkpoint_repo,
+                checkpoint_revision=self.checkpoint_revision,
+            )
             self.model = Model(**self.config["model"])
-            checkpoint = torch.load(checkpoints[-1], map_location=self.device)
+            self.checkpoint_path = checkpoints[-1]
+            checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
             self.model.load_state_dict(checkpoint["model_state_dict"])
             self.model = self.model.to(self.device)
             self.model.eval()
@@ -255,13 +269,7 @@ def _validate_model_name(model_name: str) -> str:
 
 
 def _find_checkpoint_dir(sepreformer_path: Path, model_name: str = "SepReformer_Base_WSJ0") -> Path:
-    base_dir = sepreformer_path / "models" / _validate_model_name(model_name) / "log"
-    candidates = [
-        base_dir / "pretrain_weights",
-        base_dir / "pretrained_weights",
-        base_dir / "scratch_weights",
-        base_dir / "scratch_weight",
-    ]
+    candidates = _checkpoint_dir_candidates(sepreformer_path, model_name)
     existing_dirs = [path for path in candidates if path.exists() and any(path.iterdir())]
     if existing_dirs:
         return existing_dirs[0]
@@ -271,6 +279,96 @@ def _find_checkpoint_dir(sepreformer_path: Path, model_name: str = "SepReformer_
         return candidates[2]
     checked = ", ".join(str(path) for path in candidates)
     raise FileNotFoundError(f"No SepReformer checkpoint directory found. Checked: {checked}")
+
+
+def _find_checkpoint_files(
+    sepreformer_path: Path,
+    model_name: str = "SepReformer_Base_WSJ0",
+    checkpoint_repo: str = "",
+    checkpoint_revision: str = "",
+) -> list[Path]:
+    candidates = _checkpoint_dir_candidates(sepreformer_path, model_name)
+    for checkpoint_dir in candidates:
+        checkpoints = _checkpoint_files_in_dir(checkpoint_dir)
+        if checkpoints:
+            return checkpoints
+
+    if checkpoint_repo:
+        download_dir = _download_checkpoint_snapshot(
+            sepreformer_path,
+            model_name,
+            checkpoint_repo=checkpoint_repo,
+            checkpoint_revision=checkpoint_revision,
+        )
+        checkpoints = _checkpoint_files_in_tree(download_dir, model_name)
+        if checkpoints:
+            return checkpoints
+
+    checked = ", ".join(str(path) for path in candidates)
+    if checkpoint_repo:
+        checked = f"{checked}, Hugging Face repo {checkpoint_repo}"
+    raise FileNotFoundError(f"No SepReformer checkpoint found. Checked: {checked}")
+
+
+def _checkpoint_dir_candidates(sepreformer_path: Path, model_name: str) -> list[Path]:
+    base_dir = sepreformer_path / "models" / _validate_model_name(model_name) / "log"
+    return [
+        base_dir / "pretrain_weights",
+        base_dir / "pretrained_weights",
+        base_dir / "scratch_weights",
+        base_dir / "scratch_weight",
+    ]
+
+
+def _checkpoint_files_in_dir(checkpoint_dir: Path) -> list[Path]:
+    if not checkpoint_dir.exists():
+        return []
+    return sorted(path for path in checkpoint_dir.iterdir() if path.suffix in {".pt", ".pth"})
+
+
+def _checkpoint_files_in_tree(checkpoint_dir: Path, model_name: str) -> list[Path]:
+    if not checkpoint_dir.exists():
+        return []
+    checkpoints = sorted(path for path in checkpoint_dir.rglob("*") if path.suffix in {".pt", ".pth"})
+    model_specific = [path for path in checkpoints if model_name in path.parts or model_name in path.name]
+    return model_specific or checkpoints
+
+
+def _download_checkpoint_snapshot(
+    sepreformer_path: Path,
+    model_name: str,
+    checkpoint_repo: str,
+    checkpoint_revision: str = "",
+) -> Path:
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        raise ImportError(
+            "SepReformer checkpoint is missing locally and huggingface_hub is not installed. "
+            "Install it or place checkpoints under SepReformer/models/<model>/log/*_weights."
+        ) from exc
+
+    local_dir = sepreformer_path / "models" / _validate_model_name(model_name) / "log" / "hf_checkpoint"
+    kwargs = {
+        "repo_id": checkpoint_repo,
+        "local_dir": str(local_dir),
+        "allow_patterns": [
+            f"{model_name}/**/*.pt",
+            f"{model_name}/**/*.pth",
+            f"models/{model_name}/**/*.pt",
+            f"models/{model_name}/**/*.pth",
+            "**/*.pt",
+            "**/*.pth",
+        ],
+    }
+    if checkpoint_revision:
+        kwargs["revision"] = checkpoint_revision
+
+    try:
+        downloaded = snapshot_download(local_dir_use_symlinks=False, **kwargs)
+    except TypeError:
+        downloaded = snapshot_download(**kwargs)
+    return Path(downloaded)
 
 
 def _assign_sources_by_energy(seg1: SpeakerSegment, seg2: SpeakerSegment, src1: np.ndarray, src2: np.ndarray):

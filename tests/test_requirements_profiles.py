@@ -13,12 +13,16 @@ class RequirementsProfilesTest(unittest.TestCase):
 
     def test_backend_profiles_are_split_to_avoid_pyannote_conflicts(self):
         community = Path("requirements/pyannote-community.txt").read_text(encoding="utf-8")
+        pyannote31 = Path("requirements/pyannote-3.1.txt").read_text(encoding="utf-8")
         pixit = Path("requirements/pyannote-pixit.txt").read_text(encoding="utf-8")
         diarizen = Path("requirements/diarizen.txt").read_text(encoding="utf-8")
         sortformer = Path("requirements/sortformer.txt").read_text(encoding="utf-8")
 
         self.assertIn("pyannote.audio>=4.0", community)
         self.assertNotIn("pyannote.audio[separation]==3.3.2", community)
+        self.assertIn("pyannote.audio==3.3.2", pyannote31)
+        self.assertNotIn("pyannote.audio>=4.0", pyannote31)
+        self.assertNotIn("pyannote.audio[separation]", pyannote31)
         self.assertIn("pyannote.audio[separation]==3.3.2", pixit)
         self.assertNotIn("pyannote.audio>=4.0", pixit)
         self.assertNotIn("pyannote.audio", diarizen)

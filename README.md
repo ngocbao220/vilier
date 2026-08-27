@@ -59,6 +59,7 @@ Use the matching profile when you change backend:
 
 ```bash
 python -m pip install -r requirements/pyannote-community.txt
+python -m pip install -r requirements/pyannote-3.1.txt
 python -m pip install -r requirements/pyannote-pixit.txt
 python -m pip install -r requirements/sortformer.txt
 python -m pip install -r requirements/diarizen.txt
@@ -122,6 +123,7 @@ Available option groups are `vad`, `diarization`, `music-separation`, `overlap-s
 |---------|---------------|-------|
 | NVIDIA Sortformer | `diarization.backend=sortformer`, `diarization.model=nvidia/diar_sortformer_4spk-v1` | Uses `nemo.collections.asr.models.SortformerEncLabelModel`. Install `requirements/sortformer.txt`. VAD utterances are concatenated into speech-only files shorter than `diarization.max_chunk_seconds`, then diarization timestamps are mapped back to the original timeline. |
 | pyannote Community | `diarization.backend=pyannote`, `diarization.model=pyannote/speaker-diarization-community-1` | Default config. Install `requirements/pyannote-community.txt`, accept the Hugging Face conditions for the pyannote model, and set the token env configured by `diarization.token_env`, usually `HUGGINGFACE_TOKEN`. |
+| pyannote 3.1 | `diarization.backend=pyannote`, `diarization.model=pyannote/speaker-diarization-3.1` | Install `requirements/pyannote-3.1.txt` in a separate environment from pyannote Community and DiariZen. Accept the Hugging Face conditions for the pyannote model and set `HUGGINGFACE_TOKEN` or the env named by `diarization.token_env`. |
 | pyannote PixIT | `diarization.backend=pixit` or `pyannote_pixit`, `diarization.model=pyannote/speech-separation-ami-1.0` | Runs on `audio.standardized.wav` directly. Install `requirements/pyannote-pixit.txt` in a separate environment from pyannote Community and DiariZen. `diarization.device=auto` uses CUDA if available, then Apple MPS, then CPU. Set `diarization.device=mps` to force Apple GPU on macOS; unsupported MPS ops can still fall back to CPU through PyTorch. |
 | DiariZen | `diarization.backend=diarizen`, `diarization.model=BUT-FIT/diarizen-wavlm-large-s80-md` | Runs on `audio.standardized.wav` directly through `diarizen.pipelines.inference.DiariZenPipeline`. Install `requirements/diarizen.txt` in its own environment before using this backend. Upstream releases the model weights under CC BY-NC 4.0, so treat them as research/non-commercial weights. |
 
@@ -188,7 +190,7 @@ SepReformer is optional. If `overlap_separation.enabled=false`, overlapping regi
 
 | Backend | Config values | Notes |
 |---------|---------------|-------|
-| SepReformer | `overlap_separation.backend=sepreformer`, `overlap_separation.model_name=<model_dir>` | `model_name` is the directory under `SepReFormer/models`. The corresponding checkpoint must exist under that model's `log/pretrain_weights`, `log/pretrained_weights`, `log/scratch_weights`, or `log/scratch_weight`. |
+| SepReformer | `overlap_separation.backend=sepreformer`, `overlap_separation.model_name=<model_dir>` | `model_name` is the directory under `SepReFormer/models`. If the checkpoint is not present locally, set `overlap_separation.checkpoint_repo` to a Hugging Face repo such as `niobures/SepReformer`; the pipeline downloads `.pt`/`.pth` checkpoint files when overlap separation is enabled. |
 
 Model directories present in this checkout:
 
@@ -210,6 +212,8 @@ Example SepReformer config:
     "backend": "sepreformer",
     "sepreformer_path": "SepReformer",
     "model_name": "SepReformer_Base_WSJ0",
+    "checkpoint_repo": "niobures/SepReformer",
+    "checkpoint_revision": "",
     "device": "cpu",
     "overlap_threshold_seconds": 0.2
   }

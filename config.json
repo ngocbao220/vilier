@@ -69,6 +69,8 @@
     "backend": "sepreformer",
     "sepreformer_path": "SepReformer",
     "model_name": "SepReformer_Base_WSJ0",
+    "checkpoint_repo": "niobures/SepReformer",
+    "checkpoint_revision": "",
     "device": "auto",
     "overlap_threshold_seconds": 0.2
   }

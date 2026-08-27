@@ -14,6 +14,10 @@ class ColabNotebookTest(unittest.TestCase):
         self.assertIn('DRIVE_OUTPUT_DIR = "/content/drive/MyDrive/VDT-TurnTaking/outputs"', source)
         self.assertIn('os.environ["INPUT_PATH"] = str(audio_path)', source)
         self.assertIn('os.environ["OUTPUT_PATH"] = str(output_dir)', source)
+        self.assertIn('"pyannote/speaker-diarization-3.1"', source)
+        self.assertIn('PYANNOTE_PROFILE = "pyannote-3.1"', source)
+        self.assertIn('SEPREFORMER_CHECKPOINT_REPO = "niobures/SepReformer"', source)
+        self.assertIn('config["overlap_separation"]["checkpoint_repo"] = SEPREFORMER_CHECKPOINT_REPO', source)
         self.assertIn("!bash run.sh", source)
         self.assertNotIn("/kaggle/input", source)
 

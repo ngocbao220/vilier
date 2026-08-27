@@ -1,0 +1,7 @@
+-r vad.txt
+
+# Use this profile for pyannote/speaker-diarization-3.1.
+# Keep it isolated from pyannote-community, pyannote-pixit, Sortformer, and DiariZen.
+pyannote.audio==3.3.2
+huggingface_hub
+speechbrain
