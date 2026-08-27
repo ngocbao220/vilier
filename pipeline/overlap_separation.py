@@ -125,20 +125,31 @@ def load_overlap_separator(config: dict, dry_run: bool = False, warnings: list[s
     if dry_run:
         return NoOpSeparator()
     backend = config.get("backend", "sepreformer")
-    if backend != "sepreformer":
+    if backend == "sepreformer":
+        try:
+            return SepReformerSeparator(
+                _resolve_sepreformer_path(config.get("sepreformer_path", "SepReformer")),
+                config.get("device", "cpu"),
+                config.get("model_name", "SepReformer_Base_WSJ0"),
+                config.get("checkpoint_repo", ""),
+                config.get("checkpoint_revision", ""),
+            )
+        except Exception as exc:
+            if warnings is not None:
+                warnings.append(str(exc))
+            return None
+    elif backend == "speechbrain":
+        try:
+            return SpeechBrainSeparator(
+                config.get("model_name", "speechbrain/sepformer-wsj02mix"),
+                config.get("device", "cpu")
+            )
+        except Exception as exc:
+            if warnings is not None:
+                warnings.append(str(exc))
+            return None
+    else:
         raise ValueError(f"Unsupported overlap separation backend: {backend}")
-    try:
-        return SepReformerSeparator(
-            _resolve_sepreformer_path(config.get("sepreformer_path", "SepReformer")),
-            config.get("device", "cpu"),
-            config.get("model_name", "SepReformer_Base_WSJ0"),
-            config.get("checkpoint_repo", ""),
-            config.get("checkpoint_revision", ""),
-        )
-    except Exception as exc:
-        if warnings is not None:
-            warnings.append(str(exc))
-        return None
 
 
 class NoOpSeparator:
@@ -146,6 +157,39 @@ class NoOpSeparator:
 
     def separate(self, audio_segment: np.ndarray, sample_rate: int):
         return audio_segment, audio_segment
+
+
+class SpeechBrainSeparator:
+    def __init__(self, source: str = "speechbrain/sepformer-wsj02mix", device: str = "cpu"):
+        import torch
+        from speechbrain.inference.separation import SepformerSeparation
+        self.resolved_device = resolve_auto_device(torch, device, warn_label="overlap_separation.device")
+        savedir = f"pretrained_models/{source.split('/')[-1]}"
+        self.model = SepformerSeparation.from_hparams(
+            source=source,
+            savedir=savedir,
+            run_opts={"device": self.resolved_device}
+        )
+
+    def separate(self, audio_segment: np.ndarray, sample_rate: int):
+        import torch
+        import librosa
+        if sample_rate != 8000:
+            audio_8k = librosa.resample(audio_segment, orig_sr=sample_rate, target_sr=8000)
+        else:
+            audio_8k = audio_segment
+            
+        mixture = torch.tensor(audio_8k, dtype=torch.float32).unsqueeze(0).to(self.resolved_device)
+        est_sources = self.model.separate_batch(mixture)
+        
+        src1 = est_sources[0, :, 0].detach().cpu().numpy()
+        src2 = est_sources[0, :, 1].detach().cpu().numpy()
+        
+        if sample_rate != 8000:
+            src1 = librosa.resample(src1, orig_sr=8000, target_sr=sample_rate)
+            src2 = librosa.resample(src2, orig_sr=8000, target_sr=sample_rate)
+            
+        return _match_length(src1, len(audio_segment)), _match_length(src2, len(audio_segment))
 
 
 class SepReformerSeparator:

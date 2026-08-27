@@ -66,11 +66,8 @@
   },
   "overlap_separation": {
     "enabled": true,
-    "backend": "sepreformer",
-    "sepreformer_path": "SepReformer",
-    "model_name": "SepReformer_Base_WSJ0",
-    "checkpoint_repo": "niobures/SepReformer",
-    "checkpoint_revision": "",
+    "backend": "speechbrain",
+    "model_name": "speechbrain/sepformer-wsj02mix",
     "device": "auto",
     "overlap_threshold_seconds": 0.2
   }
