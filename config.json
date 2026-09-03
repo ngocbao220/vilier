@@ -91,7 +91,7 @@
     "residual_subtract": 0.5
   },
   "overlap_separation": {
-    "_model_replacement_comment": "Change backend/model_name to replace overlap speech separation model. Examples: clearvoice + alibabasglab/MossFormer2_SS_16K, speechbrain + speechbrain/sepformer-wsj02mix, sepreformer + SepReformer_Base_WSJ0.",
+    "_model_replacement_comment": "Change backend/model_name to replace overlap speech separation model. Examples: clearvoice + alibabasglab/MossFormer2_SS_16K, speechbrain + speechbrain/sepformer-wsj02mix, sepreformer + SepReformer_Base_WSJ0. pyannote PixIT is tracked here as the pyannote speech-separation model profile; the current runtime still exposes its diarization labels through diarization.backend=pixit for backward compatibility.",
     "_model_replacement_examples": [
       {
         "backend": "clearvoice",
@@ -107,6 +107,12 @@
         "backend": "sepreformer",
         "model_name": "SepReformer_Base_WSJ0",
         "requirements": "requirements/sepreformer.txt"
+      },
+      {
+        "backend": "pyannote_pixit",
+        "model_name": "pyannote/speech-separation-ami-1.0",
+        "requirements": "requirements/pyannote-pixit.txt",
+        "runtime_note": "Separation model profile. Use diarization.backend=pixit only when you need the legacy pyannote PixIT diarization-label wrapper."
       }
     ],
     "enabled": true,

@@ -41,4 +41,8 @@ if [[ "${DRY_RUN}" == "1" ]]; then
 fi
 args+=("$@")
 
-PYTHONPATH="${SCRIPT_DIR}" "${PYTHON_BIN}" -m pipeline.cli "${args[@]}"
+if command -v uv >/dev/null 2>&1 && [[ -z "${PYTHON_BIN_SET_BY_USER:-}" ]]; then
+  PYTHONPATH="${SCRIPT_DIR}" uv run python -m pipeline.cli "${args[@]}"
+else
+  PYTHONPATH="${SCRIPT_DIR}" "${PYTHON_BIN}" -m pipeline.cli "${args[@]}"
+fi

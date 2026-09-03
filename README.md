@@ -43,13 +43,13 @@ bash run.sh
 
 ## Run With Configured Models
 
-Install dependencies in the active environment:
+Install dependencies and sync the environment using `uv`:
 
 ```bash
-python -m pip install -r requirements.txt
+uv sync
 ```
 
-`requirements.txt` installs only the default dependency profile for the current
+This installs the default dependency profile for the current
 `config.json`: Silero VAD plus `pyannote/speaker-diarization-community-1`.
 Do not install every backend into one environment; pyannote Community, pyannote
 PixIT 3.x, Sortformer/NeMo, and DiariZen can require incompatible dependency
@@ -58,16 +58,16 @@ sets.
 Use the matching profile when you change backend:
 
 ```bash
-python -m pip install -r requirements/pyannote-community.txt
-python -m pip install -r requirements/pyannote-3.1.txt
-python -m pip install -r requirements/pyannote-pixit.txt
-python -m pip install -r requirements/sortformer.txt
-python -m pip install -r requirements/diarizen.txt
-python -m pip install -r requirements/demucs.txt
-python -m pip install -r requirements/asr.txt
-python -m pip install -r requirements/sepreformer.txt
-python -m pip install -r requirements/clearvoice-separation.txt
-python -m pip install -r requirements/speechbrain-separation.txt
+uv pip install -r requirements/pyannote-community.txt
+uv pip install -r requirements/pyannote-3.1.txt
+uv pip install -r requirements/pyannote-pixit.txt
+uv pip install -r requirements/sortformer.txt
+uv pip install -r requirements/diarizen.txt
+uv pip install -r requirements/demucs.txt
+uv pip install -r requirements/asr.txt
+uv pip install -r requirements/sepreformer.txt
+uv pip install -r requirements/clearvoice-separation.txt
+uv pip install -r requirements/speechbrain-separation.txt
 ```
 
 `run.sh` reads `entrypoint.input_path` from `config.json`. Set it to one audio file to process only that file:
@@ -148,7 +148,7 @@ If Sortformer fails with `module 'numba.cuda.types' has no attribute 'NPDatetime
 reinstall the Sortformer profile so NeMo uses the pinned Numba range:
 
 ```bash
-python -m pip install -r requirements/sortformer.txt
+uv pip install -r requirements/sortformer.txt
 ```
 
 Example PixIT config:

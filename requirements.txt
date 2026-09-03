@@ -1,3 +1,0 @@
-# Default install for the current config.json:
-# Silero VAD + pyannote community diarization.
--r requirements/pyannote-community.txt

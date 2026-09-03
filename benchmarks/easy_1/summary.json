@@ -1,0 +1,26 @@
+{
+  "samples": 1,
+  "hours": 0.08221416666666667,
+  "metric_status": "computed",
+  "metric_names": [
+    "track_count",
+    "duration_sec",
+    "active_track_ratio",
+    "multi_active_ratio",
+    "reconstruction_snr_db",
+    "residual_rms",
+    "clipped_sample_ratio",
+    "mean_track_leakage_ratio",
+    "overlap_region_count",
+    "enhanced_segment_count"
+  ],
+  "average_reconstruction_snr_db": 7.183,
+  "average_multi_active_ratio": 0.094216,
+  "average_track_leakage_ratio": 0.0,
+  "total_overlap_regions": 0,
+  "backends": {
+    "clearvoice": 1
+  },
+  "metrics_jsonl": "/Users/ngocbao/Documents/Document/research/main/speech/exps/data/vilier/benchmarks/easy_1/metrics.jsonl",
+  "review_manifest_jsonl": "/Users/ngocbao/Documents/Document/research/main/speech/exps/data/vilier/benchmarks/easy_1/review_manifest.jsonl"
+}

@@ -285,7 +285,15 @@ class SortformerDiarizer:
 
     def _load_model(self):
         _configure_nemo_logging(self.nemo_log_level)
-        from nemo.collections.asr.models import SortformerEncLabelModel
+        try:
+            from nemo.collections.asr.models import SortformerEncLabelModel
+        except ModuleNotFoundError as exc:
+            if exc.name != "nemo":
+                raise
+            raise ModuleNotFoundError(
+                "Sortformer diarization requires NeMo. Install requirements/sortformer.txt in this environment, "
+                "or use diarization.backend=pyannote when you only want to test overlap_separation.backend=clearvoice."
+            ) from exc
         import torch
 
         model = SortformerEncLabelModel.from_pretrained(self.config.get("model", "nvidia/diar_sortformer_4spk-v1"))

@@ -23,6 +23,7 @@ from pipeline.diarization import (
     _speechbrain_use_auth_token_compat,
     load_diarizer,
     PyannotePixitDiarizer,
+    SortformerDiarizer,
     build_diarization_chunks,
     build_speaker_linking_artifact,
     pyannote_annotation_to_segments,
@@ -279,6 +280,18 @@ class TimelineTest(unittest.TestCase):
         self.assertEqual(summary["embedding_count"], 1)
         self.assertEqual(summary["embedding_model"], "speechbrain/spkrec-ecapa-voxceleb")
         self.assertEqual(data["embeddings"][0]["vector"], [0.1, 0.2])
+
+    def test_sortformer_missing_nemo_error_points_to_requirements_profile(self):
+        original_import = builtins.__import__
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name.startswith("nemo"):
+                raise ModuleNotFoundError("No module named 'nemo'", name="nemo")
+            return original_import(name, globals, locals, fromlist, level)
+
+        with mock.patch.object(builtins, "__import__", side_effect=fake_import):
+            with self.assertRaisesRegex(ModuleNotFoundError, "requirements/sortformer.txt"):
+                SortformerDiarizer({"model": "nvidia/diar_sortformer_4spk-v1"})
 
     def test_apply_music_separation_writes_cleaned_audio(self):
         class FakeMusicSeparator:
