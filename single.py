@@ -6,6 +6,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from pipeline.benchmark import run_benchmark
 from pipeline.cli import ProgressBar, load_config, process_one, resolve_state_dir
 
 
@@ -32,16 +33,23 @@ def main() -> None:
         output.mkdir(parents=True, exist_ok=True)
         for target, record in zip((output / "speakerA.wav", output / "speakerB.wav"), tracks):
             shutil.copy2(manifest_path.parent / record["track_wav"], target)
+        print("========= Phase 2: Running Benchmark: Vilier =========", flush=True)
+        benchmark_progress = ProgressBar(total=1)
+        benchmark_progress.start(args.input.stem, "benchmark")
+        benchmark_summary = run_benchmark(root, output / "benchmark")
+        benchmark_progress.complete(args.input.stem, "benchmark")
         if args.debug:
             shutil.copytree(manifest_path.parent, output / "debug", dirs_exist_ok=True)
         (output / "run.json").write_text(json.dumps({"input": str(args.input), "speakerA": str(output / "speakerA.wav"),
             "speakerB": str(output / "speakerB.wav"), "debug": args.debug,
-            "debug_dir": str(output / "debug") if args.debug else None, "phases": sections}, default=str, indent=2) + "\n")
+            "debug_dir": str(output / "debug") if args.debug else None, "benchmark": str(benchmark_summary),
+            "phases": sections}, default=str, indent=2) + "\n")
     print("========= Done: Vilier =========", flush=True)
     print(f"output={output.resolve()}", flush=True)
     print(f"speakerA={output / 'speakerA.wav'}", flush=True)
     print(f"speakerB={output / 'speakerB.wav'}", flush=True)
     print(f"run_json={output / 'run.json'}", flush=True)
+    print(f"benchmark={output / 'benchmark' / 'summary.json'}", flush=True)
     if args.debug:
         print(f"debug={output / 'debug'}", flush=True)
 
