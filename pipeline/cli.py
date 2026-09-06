@@ -40,14 +40,33 @@ class PipelineRunError(Exception):
 
 
 class ProgressBar:
+    _STEPS = {
+        "preprocess": ("1", "Preparing input", "1.1 Preprocess"),
+        "vad": ("2", "Running Pipeline: Diarization", "2.1 VAD"),
+        "diarization_chunks": ("2", "Running Pipeline: Diarization", "2.2 Diarization chunks"),
+        "diarization": ("2", "Running Pipeline: Diarization", "2.3 Diarization"),
+        "music_separation": ("3", "Running Pipeline: Separation", "3.1 Music separation"),
+        "overlap_separation": ("3", "Running Pipeline: Separation", "3.2 Overlap separation"),
+        "tracks": ("3", "Running Pipeline: Separation", "3.3 Speaker tracks"),
+        "asr": ("4", "Running Pipeline: ASR and labeling", "4.1 ASR"),
+        "transcript": ("4", "Running Pipeline: ASR and labeling", "4.1 Transcript"),
+        "state_labeling": ("4", "Running Pipeline: ASR and labeling", "4.2 State labeling"),
+        "manifest": ("5", "Writing outputs", "5.1 Manifest"),
+    }
+
     def __init__(self, total: int, enabled: bool = True, stream: TextIO | None = None):
         self.total = max(1, total)
         self.enabled = enabled
         self.stream = stream or sys.stderr
         self.completed = 0
         self.item_bars = {}
+        self.current_phase = ""
 
     def start(self, audio_id: str, step: str) -> None:
+        phase, title, _ = self._STEPS.get(step, ("", "Running Pipeline", step.replace("_", " ").title()))
+        if phase and phase != self.current_phase:
+            self.current_phase = phase
+            print(f"========= Phase {phase}: {title} =========", file=self.stream, flush=True)
         self._write(audio_id, step, "RUN", self.completed)
 
     def complete(self, audio_id: str, step: str) -> None:
@@ -69,7 +88,7 @@ class ProgressBar:
             if bar is None:
                 bar = tqdm_cls(
                     total=total,
-                    desc=f"{audio_id}/{step}",
+                    desc=f"{audio_id} / {self._step_label(step)}",
                     unit="it",
                     leave=False,
                     file=self.stream,
@@ -82,12 +101,15 @@ class ProgressBar:
             if label:
                 bar.set_postfix_str(_short_label(label), refresh=True)
             return
-        print(f"  {audio_id}/{step}: {current}/{total} {label}", file=self.stream, flush=True)
+        print(f"  {audio_id} / {self._step_label(step)}: {current}/{total} {label}", file=self.stream, flush=True)
 
     def _write(self, audio_id: str, step: str, status: str, done: int) -> None:
         if not self.enabled:
             return
-        print(format_progress_bar(done, self.total, f"{audio_id}/{step}", status), file=self.stream, flush=True)
+        print(format_progress_bar(done, self.total, f"{audio_id} / {self._step_label(step)}", status), file=self.stream, flush=True)
+
+    def _step_label(self, step: str) -> str:
+        return self._STEPS.get(step, ("", "", step.replace("_", " ").title()))[2]
 
     def _close_item_bar(self, audio_id: str, step: str) -> None:
         bar = self.item_bars.pop((audio_id, step), None)
