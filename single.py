@@ -38,18 +38,25 @@ def main() -> None:
         benchmark_progress.start(args.input.stem, "benchmark")
         benchmark_summary = run_benchmark(root, output / "benchmark")
         benchmark_progress.complete(args.input.stem, "benchmark")
+        benchmark_path = output / "benchmark.json"
+        reference_metrics = ("pit_si_sdr", "delta_si_sdr", "sir", "sar", "stoi", "pesq",
+                             "crosstalk_rate", "leakage_p50_db", "leakage_p95_db", "vad_f1",
+                             "onset_mae", "offset_mae", "overlap_f1", "overlap_iou")
+        benchmark_path.write_text(json.dumps({"metric_status": "unavailable", "reference_status": "unavailable",
+            **{key: None for key in reference_metrics}, "native_report": str(benchmark_summary)}, indent=2) + "\n")
         if args.debug:
             shutil.copytree(manifest_path.parent, output / "debug", dirs_exist_ok=True)
         (output / "run.json").write_text(json.dumps({"input": str(args.input), "speakerA": str(output / "speakerA.wav"),
             "speakerB": str(output / "speakerB.wav"), "debug": args.debug,
-            "debug_dir": str(output / "debug") if args.debug else None, "benchmark": str(benchmark_summary),
+            "debug_dir": str(output / "debug") if args.debug else None, "benchmark": {"status": "unavailable",
+            "reference_status": "unavailable", "report": str(benchmark_path), "native_report": str(benchmark_summary)},
             "phases": sections}, default=str, indent=2) + "\n")
     print("========= Done: Vilier =========", flush=True)
     print(f"output={output.resolve()}", flush=True)
     print(f"speakerA={output / 'speakerA.wav'}", flush=True)
     print(f"speakerB={output / 'speakerB.wav'}", flush=True)
     print(f"run_json={output / 'run.json'}", flush=True)
-    print(f"benchmark={output / 'benchmark' / 'summary.json'}", flush=True)
+    print(f"benchmark={output / 'benchmark.json'}", flush=True)
     if args.debug:
         print(f"debug={output / 'debug'}", flush=True)
 
