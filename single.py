@@ -37,6 +37,13 @@ def main() -> None:
         (output / "run.json").write_text(json.dumps({"input": str(args.input), "speakerA": str(output / "speakerA.wav"),
             "speakerB": str(output / "speakerB.wav"), "debug": args.debug,
             "debug_dir": str(output / "debug") if args.debug else None, "phases": sections}, default=str, indent=2) + "\n")
+    print("========= Done: Vilier =========", flush=True)
+    print(f"output={output.resolve()}", flush=True)
+    print(f"speakerA={output / 'speakerA.wav'}", flush=True)
+    print(f"speakerB={output / 'speakerB.wav'}", flush=True)
+    print(f"run_json={output / 'run.json'}", flush=True)
+    if args.debug:
+        print(f"debug={output / 'debug'}", flush=True)
 
 
 if __name__ == "__main__":
