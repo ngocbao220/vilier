@@ -10,6 +10,13 @@ from pipeline.benchmark import run_benchmark
 from pipeline.cli import ProgressBar, load_config, process_one, resolve_state_dir
 
 
+def _print_benchmark_table(row: dict) -> None:
+    import pandas as pd
+    rows = [{"chỉ_số": key, "kết_quả": value} for key, value in row.items()
+            if isinstance(value, (str, int, float, bool)) or value is None]
+    print(pd.DataFrame(rows, columns=["chỉ_số", "kết_quả"]).to_string(index=False), flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run Vilier on one audio file.")
     parser.add_argument("--input", type=Path, required=True)
@@ -42,8 +49,10 @@ def main() -> None:
         reference_metrics = ("pit_si_sdr", "delta_si_sdr", "sir", "sar", "stoi", "pesq",
                              "crosstalk_rate", "leakage_p50_db", "leakage_p95_db", "vad_f1",
                              "onset_mae", "offset_mae", "overlap_f1", "overlap_iou")
-        benchmark_path.write_text(json.dumps({"metric_status": "unavailable", "reference_status": "unavailable",
-            **{key: None for key in reference_metrics}, "native_report": str(benchmark_summary)}, indent=2) + "\n")
+        benchmark_row = {"metric_status": "unavailable", "reference_status": "unavailable",
+            **{key: None for key in reference_metrics}, "native_report": str(benchmark_summary)}
+        benchmark_path.write_text(json.dumps(benchmark_row, indent=2) + "\n")
+        _print_benchmark_table(benchmark_row)
         if args.debug:
             shutil.copytree(manifest_path.parent, output / "debug", dirs_exist_ok=True)
         (output / "run.json").write_text(json.dumps({"input": str(args.input), "speakerA": str(output / "speakerA.wav"),
