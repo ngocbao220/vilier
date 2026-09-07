@@ -59,6 +59,7 @@ class ProgressBar:
         self.enabled = enabled
         self.stream = stream or sys.stderr
         self.completed = 0
+        self.phase_bars = {}
         self.item_bars = {}
         self.current_phase = ""
         self.visible_steps = visible_steps
@@ -76,20 +77,20 @@ class ProgressBar:
         subphase = self._STEPS.get(step, ("", "", ""))[2]
         if subphase:
             print(f"=== {subphase} ===", file=self.stream, flush=True)
-        self._write(audio_id, step, "RUN", self.completed)
+        self._start_phase_bar(audio_id, step)
 
     def complete(self, audio_id: str, step: str) -> None:
         if not self._is_visible(step):
             return
         self._close_item_bar(audio_id, step)
+        self._complete_phase_bar(audio_id, step)
         self.completed = min(self.completed + 1, self.total)
-        self._write(audio_id, step, "DONE", self.completed)
 
     def fail(self, audio_id: str, step: str) -> None:
         if not self._is_visible(step):
             return
         self._close_item_bar(audio_id, step)
-        self._write(audio_id, step, "FAIL", self.completed)
+        self._close_phase_bar(audio_id, step)
 
     def item(self, audio_id: str, step: str, current: int, total: int, label: str) -> None:
         if not self._is_visible(step):
@@ -114,15 +115,32 @@ class ProgressBar:
             if label:
                 bar.set_postfix_str(_short_label(label), refresh=True)
             return
-        print(f"  {audio_id} / {self._step_label(step)}: {current}/{total} {label}", file=self.stream, flush=True)
-
-    def _write(self, audio_id: str, step: str, status: str, done: int) -> None:
-        if not self._is_visible(step):
-            return
-        print(format_progress_bar(done, self.total, f"{audio_id} / {self._step_label(step)}", status), file=self.stream, flush=True)
-
     def _step_label(self, step: str) -> str:
         return self._STEPS.get(step, ("", "", step.replace("_", " ").title()))[2]
+
+    def _start_phase_bar(self, audio_id: str, step: str) -> None:
+        tqdm_cls = _tqdm()
+        if tqdm_cls is None:
+            return
+        self.phase_bars[(audio_id, step)] = tqdm_cls(
+            total=1,
+            desc=f"{audio_id} / {self._step_label(step)}",
+            unit="phase",
+            leave=False,
+            file=self.stream,
+            dynamic_ncols=True,
+        )
+
+    def _complete_phase_bar(self, audio_id: str, step: str) -> None:
+        bar = self.phase_bars.pop((audio_id, step), None)
+        if bar is not None:
+            bar.update(max(0, 1 - int(bar.n)))
+            bar.close()
+
+    def _close_phase_bar(self, audio_id: str, step: str) -> None:
+        bar = self.phase_bars.pop((audio_id, step), None)
+        if bar is not None:
+            bar.close()
 
     def _close_item_bar(self, audio_id: str, step: str) -> None:
         bar = self.item_bars.pop((audio_id, step), None)
@@ -134,8 +152,10 @@ class ProgressBar:
             return
         print(f"Done, found {len(intervals)} {title}:", file=self.stream, flush=True)
         singular = title[:-1] if title.endswith("s") else title
-        for index, (start, end) in enumerate(intervals, start=1):
+        for index, (start, end) in enumerate(intervals[:3], start=1):
             print(f"-> {singular.title()} {index}: [{start:.3f}, {end:.3f}]", file=self.stream, flush=True)
+        if len(intervals) > 3:
+            print("...", file=self.stream, flush=True)
 
 
 def _tqdm():

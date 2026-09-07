@@ -53,6 +53,8 @@ class SingleOutputTest(unittest.TestCase):
         self.assertIn("=== 2.1 VAD ===", output)
         self.assertIn("=== 2.3 Overlap Separation ===", output)
         self.assertNotIn("Diarization", output)
+        self.assertNotIn("RUN sample", output)
+        self.assertNotIn("DONE sample", output)
 
     def test_native_metric_summary_excludes_temporary_artifact_paths(self):
         summary = native_metric_summary(
@@ -63,6 +65,17 @@ class SingleOutputTest(unittest.TestCase):
         self.assertNotIn("reference_audio", summary)
         self.assertEqual(summary["track_count"], 2)
         self.assertEqual(summary["residual_rms"], 0.1)
+
+    def test_progress_details_shows_only_the_first_three_intervals(self):
+        stream = StringIO()
+        progress = ProgressBar(total=1, stream=stream)
+        progress.details("chunks", [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0), (3.0, 4.0)])
+
+        output = stream.getvalue()
+        self.assertIn("Done, found 4 chunks", output)
+        self.assertIn("-> Chunk 3: [2.000, 3.000]", output)
+        self.assertNotIn("-> Chunk 4", output)
+        self.assertTrue(output.rstrip().endswith("..."))
 
 
 if __name__ == "__main__":
