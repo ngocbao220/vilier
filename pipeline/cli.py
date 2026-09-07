@@ -22,7 +22,7 @@ from .diarization import (
 from .labeling import label_transcripts, load_labeling_runner, resolve_state_dir, write_state_outputs
 from .model_options import add_model_option_arguments, apply_model_overrides
 from .music import apply_music_separation, load_music_separator
-from .overlap_separation import apply_overlap_separation, load_overlap_separator
+from .overlap_separation import apply_overlap_separation, detect_overlapping_pairs, load_overlap_separator
 from .schema import relative_path
 from .timeline import annotate_overlaps, export_audacity_labels, export_segments_and_tracks, write_manifest
 from .tree_log import kv, log_tree, section, write_tree_log
@@ -41,45 +41,58 @@ class PipelineRunError(Exception):
 
 class ProgressBar:
     _STEPS = {
-        "preprocess": ("1", "Preparing input", "1.1 Preprocess"),
-        "vad": ("2", "Running Pipeline: Diarization", "2.1 VAD"),
-        "diarization_chunks": ("2", "Running Pipeline: Diarization", "2.2 Diarization chunks"),
-        "diarization": ("2", "Running Pipeline: Diarization", "2.3 Diarization"),
-        "music_separation": ("3", "Running Pipeline: Separation", "3.1 Music separation"),
-        "overlap_separation": ("3", "Running Pipeline: Separation", "3.2 Overlap separation"),
-        "tracks": ("3", "Running Pipeline: Separation", "3.3 Speaker tracks"),
+        "preprocess": ("1", "Preparing input", ""),
+        "vad": ("2", "Running Pipeline", "2.1 VAD"),
+        "diarization_chunks": ("2", "Running Pipeline", "2.2 Speaker Diarization"),
+        "diarization": ("2", "Running Pipeline", ""),
+        "music_separation": ("2", "Running Pipeline", "2.3 Music separation"),
+        "overlap_separation": ("2", "Running Pipeline", "2.3 Overlap Separation"),
+        "tracks": ("2", "Running Pipeline", "2.4 Concatenating"),
         "asr": ("4", "Running Pipeline: ASR and labeling", "4.1 ASR"),
         "transcript": ("4", "Running Pipeline: ASR and labeling", "4.1 Transcript"),
         "state_labeling": ("4", "Running Pipeline: ASR and labeling", "4.2 State labeling"),
         "manifest": ("5", "Writing outputs", "5.1 Manifest"),
     }
 
-    def __init__(self, total: int, enabled: bool = True, stream: TextIO | None = None):
+    def __init__(self, total: int, enabled: bool = True, stream: TextIO | None = None, visible_steps: set[str] | None = None):
         self.total = max(1, total)
         self.enabled = enabled
         self.stream = stream or sys.stderr
         self.completed = 0
         self.item_bars = {}
         self.current_phase = ""
+        self.visible_steps = visible_steps
+
+    def _is_visible(self, step: str) -> bool:
+        return self.enabled and (self.visible_steps is None or step in self.visible_steps)
 
     def start(self, audio_id: str, step: str) -> None:
+        if not self._is_visible(step):
+            return
         phase, title, _ = self._STEPS.get(step, ("", "Running Pipeline", step.replace("_", " ").title()))
         if phase and phase != self.current_phase:
             self.current_phase = phase
-            print(f"========= Phase {phase}: {title} =========", file=self.stream, flush=True)
+            print(f"========= {phase}. {title} =========", file=self.stream, flush=True)
+        subphase = self._STEPS.get(step, ("", "", ""))[2]
+        if subphase:
+            print(f"=== {subphase} ===", file=self.stream, flush=True)
         self._write(audio_id, step, "RUN", self.completed)
 
     def complete(self, audio_id: str, step: str) -> None:
+        if not self._is_visible(step):
+            return
         self._close_item_bar(audio_id, step)
         self.completed = min(self.completed + 1, self.total)
         self._write(audio_id, step, "DONE", self.completed)
 
     def fail(self, audio_id: str, step: str) -> None:
+        if not self._is_visible(step):
+            return
         self._close_item_bar(audio_id, step)
         self._write(audio_id, step, "FAIL", self.completed)
 
     def item(self, audio_id: str, step: str, current: int, total: int, label: str) -> None:
-        if not self.enabled:
+        if not self._is_visible(step):
             return
         tqdm_cls = _tqdm()
         if tqdm_cls is not None and total > 0:
@@ -104,7 +117,7 @@ class ProgressBar:
         print(f"  {audio_id} / {self._step_label(step)}: {current}/{total} {label}", file=self.stream, flush=True)
 
     def _write(self, audio_id: str, step: str, status: str, done: int) -> None:
-        if not self.enabled:
+        if not self._is_visible(step):
             return
         print(format_progress_bar(done, self.total, f"{audio_id} / {self._step_label(step)}", status), file=self.stream, flush=True)
 
@@ -115,6 +128,14 @@ class ProgressBar:
         bar = self.item_bars.pop((audio_id, step), None)
         if bar is not None:
             bar.close()
+
+    def details(self, title: str, intervals: list[tuple[float, float]]) -> None:
+        if not self.enabled:
+            return
+        print(f"Done, found {len(intervals)} {title}:", file=self.stream, flush=True)
+        singular = title[:-1] if title.endswith("s") else title
+        for index, (start, end) in enumerate(intervals, start=1):
+            print(f"-> {singular.title()} {index}: [{start:.3f}, {end:.3f}]", file=self.stream, flush=True)
 
 
 def _tqdm():
@@ -320,6 +341,7 @@ def process_one(
         )
         if progress is not None:
             progress.complete(audio_id, current_step)
+            progress.details("chunks", [(float(item["start"]), float(item["end"])) for item in vad_segments])
 
         current_step = "diarization_chunks"
         if progress is not None:
@@ -383,6 +405,10 @@ def process_one(
                 ),
             )
         segments = annotate_overlaps(segments, threshold=float(config.get("overlap", {}).get("threshold_seconds", 0.05)))
+        overlap_parts = detect_overlapping_pairs(
+            segments,
+            float(config.get("overlap", {}).get("threshold_seconds", 0.05)),
+        )
         speaker_linking_payload = build_speaker_linking_artifact(
             backend=str(diarization_config.get("backend", "sortformer")),
             model=str(diarization_config.get("model", "nvidia/diar_sortformer_4spk-v1")),
@@ -406,6 +432,7 @@ def process_one(
         )
         if progress is not None:
             progress.complete(audio_id, current_step)
+            progress.details("overlap parts", [(part["start"], part["end"]) for part in overlap_parts])
 
         current_step = "music_separation"
         if progress is not None:
